@@ -22,9 +22,14 @@ CImgDisplay debug;
 // Simple image class
 class simg{
 public:
-  inline simg(): xSize(0), ySize(0), zSize(0), maxVal(0) {  };
-  inline simg(const uimg &in_img, int width, int height, int channels=0, int maxVal=255): xSize(width), ySize(height), zSize(channels), maxVal(maxVal){
-    data = in_img;
+  inline simg(): xSize(0), ySize(0), zSize(0), maxVal(0) {  }
+  inline simg(int width, int height, unsigned char initialValue): xSize(width), ySize(height), zSize(1), maxVal(255) {
+  size=xSize*ySize*zSize; 
+  data.resize(size);
+  std::fill(data.begin(), data.end(), initialValue);
+  };
+  inline simg(const simg &in_img, int width, int height, int channels=0, int maxVal=255): xSize(width), ySize(height), zSize(channels), maxVal(maxVal){
+    data = in_img.data;
     size = xSize*ySize*zSize;
   };
   void init(){
@@ -88,7 +93,6 @@ pair<int2, int2> getPatchBeginEnd(int2 p, int k, int xSize, int ySize){
 void drawGroup(const simg &image, upatches &patches, upatchnum &npatches, int k, int xSize, int ySize, int start, int Np){
     uimg img_copy(image.data);
     CImg<unsigned char> img( img_copy.data(),image.xSize,image.ySize,1,1,1);
-    const unsigned char c_ref[] = {155};
     const unsigned char c_mat[] = {255, 0, 0};
     for(int i=start; i<Np;++i){
         pair<int2,int2> ref = getPatchBeginEnd(patches[i], k, xSize, ySize); 
@@ -101,7 +105,7 @@ void blockMatching( const simg &image, upatches &patches, upatchnum &npatches, i
   int ySize = image.ySize;
   int step=k; 
   uint ref_patch_count(0);
-  int start(0);
+  //int start(0);
   // Go through the image with step
   for (int j=0; j<image.ySize; j+=step)
     for (int i=0; i<image.xSize; i+=step){
@@ -127,25 +131,61 @@ void blockMatching( const simg &image, upatches &patches, upatchnum &npatches, i
           npatches[ref_patch_count-1]++;
         }
        }
-    cout <<"Patch nr: "<<ref_patch_count<<", number in the group: "<<npatches[ref_patch_count-1]<<endl;
+    //cout <<"Patch nr: "<<ref_patch_count<<", number in the group: "<<npatches[ref_patch_count-1]<<endl;
     //cout << "Start "<<start<<endl;
-    drawGroup(image, patches, npatches, k, xSize, ySize, start, start+npatches[ref_patch_count-1]);
-    start += npatches[ref_patch_count-1];
+    //drawGroup(image, patches, npatches, k, xSize, ySize, start, start+npatches[ref_patch_count-1]);
+    //start += npatches[ref_patch_count-1];
   }
   
 }
+void wavelet2DTransform( const simg &image, const simg &coeff, int level){
+   simg C(image, image.xSize, image.ySize);
+   int xsize=image.xSize;
+   int hxsize=image.xSize/2;
+   int hysize=image.ySize/2;
+   simg CK(hxsize, hysize, 0);
+   simg DH(hxsize, hysize, 0);
+   simg DV(hxsize, hysize, 0);
+   simg DD(hxsize, hysize, 0);
+   float nu=0.25;
+   for(int y=0; y<hysize; y++)
+     for(int x=0; x<hxsize; x++) {
+       CK.data[idx(x,y,hxsize)]=nu*(C.data[idx(2*x,2*y,xsize)]+C.data[idx(2*x+1,2*y,xsize)]+C.data[idx(2*x,2*y+1,xsize)]+C.data[idx(2*x+1,2*y+1,xsize)]);
+       DH.data[idx(x,y,hxsize)]=nu*(C.data[idx(2*x,2*y,xsize)]+C.data[idx(2*x,2*y+1,xsize)]-C.data[idx(2*x+1,2*y,xsize)]-C.data[idx(2*x+1,2*y+1,xsize)]);
+       DV.data[idx(x,y,hxsize)]=nu*(C.data[idx(2*x,2*y,xsize)]+C.data[idx(2*x+1,2*y,xsize)]-C.data[idx(2*x,2*y+1,xsize)]-C.data[idx(2*x+1,2*y+1,xsize)]);
+       DD.data[idx(x,y,hxsize)]=nu*(C.data[idx(2*x,2*y,xsize)]-C.data[idx(2*x+1,2*y,xsize)]-C.data[idx(2*x,2*y+1,xsize)]+C.data[idx(2*x+1,2*y+1,xsize)]);
+     }
+   CImg<unsigned char> sCK(CK.data.data(), CK.xSize, CK.ySize,1,1,1);
+   CImg<unsigned char> sDH(DH.data.data(), CK.xSize, CK.ySize,1,1,1);
+   CImg<unsigned char> sDV(DV.data.data(), CK.xSize, CK.ySize,1,1,1);
+   CImg<unsigned char> sDD(DD.data.data(), CK.xSize, CK.ySize,1,1,1);
+   sCK.display();
+   sDH.display();
+   sDV.display();
+   sDD.display();
+}
+void waveletI2DTransform( const simg &image, const simg &coeff, int level){
 
+}
 int main(){
   simg in_image;      // Original noisy image 
   int k(4);           // Patch size
   int N(20);          // Search window
-  float Th(1000.0);    // Similarity threshold for the first step
-  int maxN(15);        // Maximal number of the patches in one group
+  float Th(500.0);    // Similarity threshold for the first step
+  int maxN(15);       // Maximal number of the patches in one group
   upatches patches;   // Vector 
   upatchnum npatches; // Vector 
+  cout<<"Reading image...";
   if(! readPGM("barbara.pgm", in_image) ){ cerr << "Failed to open the image.\n"; return EXIT_FAILURE;}
+  cout<<"done"<<endl;
   
+  cout<<"Performing block matching...";
   blockMatching(in_image, patches, npatches, N, Th, maxN, k);
+  cout<<"done"<<endl;
+
+  cout<<"Performing wavelet2DTransform...";
+  wavelet2DTransform(in_image, in_image, 1);
+  cout<<"done"<<endl;
   // tranformThresholdingITransform
   // Aggregation
   writePGM("denoised.pgm", in_image);
