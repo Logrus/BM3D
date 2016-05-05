@@ -117,7 +117,7 @@ void blockMatching(simg &image,
 {
   int xSize = image.xSize;
   int ySize = image.ySize;
-  int step=patch_radius; 
+  int step=patch_radius/4; 
   
   // Go through the image with step
   for (int j=0; j<image.ySize; j+=step)
@@ -131,8 +131,8 @@ void blockMatching(simg &image,
       // Cut boundary of the window if it exceeds image size
       int wxb = max(0, i - window_radius); // window x begin
       int wyb = max(0, j - window_radius); // window y begin
-      int wxe = min(xSize - 1, i + window_radius); // window x end
-      int wye = min(ySize - 1, j + window_radius); // window y end 
+      int wxe = min(xSize-1, i + window_radius); // window x end
+      int wye = min(ySize-1, j + window_radius); // window y end 
       
       // Go through the window
       for (int wy = wyb; wy <= wye; wy++)
