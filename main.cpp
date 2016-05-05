@@ -14,7 +14,6 @@ using namespace cimg_library;
 #define idx(x,y,x_size) ((x) + (y)*(x_size))
 #define idx3(x,y,z,x_size,y_size) ((x) + ((y)+(y_size)*(z))*(x_size))
 #define CLIP(minv,val,maxv) (min((maxv), max((minv),(val))))
-#define ISQRT2 0.70710678118f
 
 typedef vector<unsigned char> uimg;
 typedef vector<int2> upatches;
@@ -67,101 +66,100 @@ public:
   int maxVal;
 };
 
-bool readPGM(const string &filename, simg &image){
+bool readPGM(const string &filename, 
+             simg &image)
+{
   ifstream File(filename.c_str(), ifstream::binary);
-  File.seekg (0, File.end);
-  int length = File.tellg();
-  File.seekg (0, File.beg);
+  int length;
+  // Get size
+  File.seekg(0,File.end); length=File.tellg(); File.seekg(0,File.beg);
   string dummy;
-  File >> dummy >> image.xSize >> image.ySize >>  image.maxVal;
-  File.get();
-  image.init();
+  File >> dummy >> image.xSize >> image.ySize >> image.maxVal;
+  File.get(); // Remove all excessive spaces
+  image.init(); // (Re)Initialize image from sizes
   File.read(reinterpret_cast<char*>(image.data.data()), length); 
   return true;
 }
 
-bool writePGM(const string &filename, const simg &image){
+bool writePGM(const string &filename, 
+              const simg &image)
+{
   std::ofstream File(filename.c_str());
   File << "P5\n" << image.xSize << " " << image.ySize << "\n"<< image.maxVal <<"\n";
   File.write (reinterpret_cast<const char*>(image.data.data()), image.size*sizeof(char));
   File.close();
   return true;
 }
-float dist( const simg &image, int patch_size, int2 p1, int2 p2, int xSize, int ySize){
-  float dist(0);
-  for(int jj=-patch_size; jj<=patch_size; ++jj)
-    for(int ii=-patch_size; ii<=patch_size; ++ii){
-      int i1x = CLIP(0, p1.x + ii, xSize);
-      int i1y = CLIP(0, p1.y + jj, ySize);
-      int i2x = CLIP(0, p2.x + ii, xSize);
-      int i2y = CLIP(0, p2.y + jj, ySize);
 
-      float tmp = image.data[ idx(i1x, i1y, xSize)] - image.data[ idx(i2x, i2y, xSize)];
+float dist(simg &image, 
+           int patch_radius, 
+           int2 p1, // Reference patch
+           int2 p2)
+{
+  float dist(0);
+  for(int y=-patch_radius; y<=patch_radius; ++y)
+    for(int x=-patch_radius; x<=patch_radius; ++x){
+      // Note that image automatically clamps borders
+      float tmp = image(p1.x+x, p1.y+y) - image(p2.x+x, p2.y+y);
       dist += tmp*tmp;
     }
-  return dist/patch_size/patch_size;
+  // Normalize
+  return dist/patch_radius/patch_radius;
 }
-pair<int2, int2> getPatchBeginEnd(int2 p, int k, int xSize, int ySize){
-  int2 a,b;
-  a.x = CLIP(0, p.x - k, xSize);
-  a.y = CLIP(0, p.y - k, ySize);
-  b.x = CLIP(0, p.x + k, xSize);
-  b.y = CLIP(0, p.y + k, ySize);
-  return make_pair(a, b);
-}
-void drawGroup(const simg &image, upatches &patches, upatchnum &npatches, int k, int xSize, int ySize, int start, int Np){
-    uimg img_copy(image.data);
-    CImg<unsigned char> img( img_copy.data(),image.xSize,image.ySize,1,1,1);
-    const unsigned char c_mat[] = {255, 0, 0};
-    for(int i=start; i<Np;++i){
-        pair<int2,int2> ref = getPatchBeginEnd(patches[i], k, xSize, ySize); 
-        img.draw_rectangle(ref.first.x,ref.first.y,ref.second.x,ref.second.y,c_mat, 0.5);
-    }
-    img.display(disp1);
-}
-void blockMatching( const simg &image, upatches &patches, upatchnum &npatches, int N, float Th, int maxN, int k ){
+
+void blockMatching(simg &image, 
+                   upatches &vec_patches, 
+                   upatchnum &num_patches, 
+                   int patch_radius,
+                   int window_radius, 
+                   float sim_th, 
+                   int maxN)
+{
   int xSize = image.xSize;
   int ySize = image.ySize;
-  int step=k; 
-  uint ref_patch_count(0);
-  //int start(0);
+  int step=patch_radius; 
+  
   // Go through the image with step
   for (int j=0; j<image.ySize; j+=step)
-    for (int i=0; i<image.xSize; i+=step){
-    
-    // The reference path is i,j
-    ref_patch_count++;
-    patches.push_back( make_int2(i, j) );
-    npatches.push_back(1); // Allocate memory
-    // To make cumulative sum, get the value from the previous step
-    if(npatches.size()>=2) npatches[ref_patch_count-1]+=npatches[ref_patch_count-2];
+    for (int i=0; i<image.xSize; i+=step)
+    {
+      // Include (reference patch) self
+      vec_patches.push_back( make_int2(i, j) );
+      num_patches.push_back(1);
+      unsigned curr_i = num_patches.size()-1;
 
-    // Cut boundary of the window if it exceeds image size
-    int wxb = max(0, i - N); // window x begin
-    int wyb = max(0, j - N); // window y begin
-    int wxe = min(xSize - 1, i + N); // window x end
-    int wye = min(ySize - 1, j + N); // window y end 
-    
-    int count_matched=0;
-    // Go through the window
-    simg distances(N,N,0);
-    for (int wy = wyb; wy <= wye; wy++)
-      for (int wx = wxb; wx <= wxe; wx++){
-        float distance = dist(image, 8, make_int2(i,j), make_int2(wx,wy), xSize, ySize);
-        //cout << "Distance: " << distance << endl;
-        if (i!=wx && j!=wy && distance<Th && count_matched<=maxN ){
-          count_matched++;
-          patches.push_back( make_int2(wx, wy) );
-          npatches[ref_patch_count-1]++;
-        }
-       }
-    //cout <<"Patch nr: "<<ref_patch_count<<", number in the group: "<<npatches[ref_patch_count-1]<<endl;
-    //cout << "Start "<<start<<endl;
-    //drawGroup(image, patches, npatches, k, xSize, ySize, start, start+npatches[ref_patch_count-1]);
-    //start += npatches[ref_patch_count-1];
-  }
+      // Cut boundary of the window if it exceeds image size
+      int wxb = max(0, i - window_radius); // window x begin
+      int wyb = max(0, j - window_radius); // window y begin
+      int wxe = min(xSize - 1, i + window_radius); // window x end
+      int wye = min(ySize - 1, j + window_radius); // window y end 
+      
+      // Go through the window
+      for (int wy = wyb; wy <= wye; wy++)
+        for (int wx = wxb; wx <= wxe; wx++)
+        {
+            // Cap max size in group
+            if(num_patches[curr_i]==maxN) break;
+            // Exclude itself
+            if(i==wx && j==wy) continue;
+
+            float distance = dist(image, patch_radius, make_int2(i,j), make_int2(wx,wy));
+            if(distance<sim_th)
+            {
+              vec_patches.push_back( make_int2(wx, wy) );
+              num_patches[curr_i]++;
+            }
+         }
+
+      // To make cumulative sum, carry value from the previous step
+      if(num_patches.size()>1) { // only if prev step happened
+        num_patches[curr_i]+=num_patches[curr_i-1];
+      }
+
+    } // for j 
   
 }
+
 void wavelet2DTransform( simg &coeff, const simg &image){
    simg C(image, image.xSize, image.ySize);
    int xsize=image.xSize;
@@ -292,98 +290,91 @@ void waveletI1DTransform(simg &image, simg &coeff, int dim){
       }
     }
 }
-simg gatherPatches(int idx, upatches &patches, upatchnum &nump, simg &image, int patchSize){
-  int num_patches(0);
-  if(idx==0) num_patches=nump[idx];
-  else num_patches=nump[idx]-nump[idx-1];
 
-  simg gathered_patches(patchSize*2+1,patchSize*2+1,num_patches, 0);
-  cout << gathered_patches.xSize<<endl;
-  cout << gathered_patches.ySize<<endl;
-  cout << gathered_patches.zSize<<endl;
-  cout << "Start patch "<<nump[idx]-num_patches<<" end patch "<<nump[idx]<<endl;
-  for(int z=nump[idx]-num_patches;z<nump[idx];++z){
-   int2 cp = patches[z];
+inline pair<int2, int2> getPatchBeginEnd(int2 p, int k, int xSize, int ySize){
+  int2 a,b;
+  a.x = CLIP(0, p.x - k, xSize);
+  a.y = CLIP(0, p.y - k, ySize);
+  b.x = CLIP(0, p.x + k, xSize);
+  b.y = CLIP(0, p.y + k, ySize);
+  return make_pair(a, b);
+}
+
+inline void drawGroup(simg &image, upatches &patches, upatchnum &npatches, int k, int xSize, int ySize, int start, int Np){
+    uimg img_copy(image.data);
+    CImg<unsigned char> img(img_copy.data(),image.xSize,image.ySize,1,1,1);
+    const unsigned char c_mat[] = {255, 0, 0};
+    for(int i=start; i<Np;++i){
+        pair<int2,int2> ref = getPatchBeginEnd(patches[i], k, xSize, ySize); 
+        img.draw_rectangle(ref.first.x,ref.first.y,ref.second.x,ref.second.y,c_mat, 0.5);
+    }
+    img.display(disp1);
+}
+
+simg gatherPatches(int idx, 
+                   upatches &vec_patches, 
+                   upatchnum &num_patches, 
+                   simg &image, 
+                   int patch_radius){
+  int N(0);
+  if(idx==0) N=num_patches[idx];
+  else N=num_patches[idx]-num_patches[idx-1];
+
+  int patch_size=patch_radius*2+1;
+  simg gathered_patches(patch_size, patch_size, N, 0);
+
+  int start = num_patches[idx]-N;
+  int end   = num_patches[idx];
+  cout << "Start patch "<<start<<" end patch "<<end<<endl;
+
+  for(int z=0;z<gathered_patches.zSize;++z)
+  {
+    int2 cp = vec_patches[start+z];
     for(int y=0;y<gathered_patches.ySize;++y)
       for(int x=0;x<gathered_patches.zSize;++x){
-        gathered_patches(x,y,idx) = image(cp.x-patchSize, cp.y-patchSize);
-      }}
+        gathered_patches(x,y,z) = image(cp.x-patch_radius+x, cp.y-patch_radius+y);
+      }
+  }
   return gathered_patches;
 }
 int main(){
-  simg in_image;      // Original noisy image 
-  int k(4);           // Patch size
-  int N(20);          // Search window
-  float Th(500.0);    // Similarity threshold for the first step
-  int maxN(15);       // Maximal number of the patches in one group
-  upatches patches;   // Vector 
-  upatchnum npatches; // Vector 
+
+  simg image; // Original noisy image 
   cout<<"Reading image..."<<flush;
-  if(! readPGM("barbara.pgm", in_image) ){ cerr << "Failed to open the image.\n"; return EXIT_FAILURE;}
+  if(! readPGM("barbara.pgm", image) ){ cerr << "Failed to open the image.\n"; return EXIT_FAILURE;}
   cout<<"done"<<endl;
 
-  CImg<unsigned char> orig(in_image.data.data(), in_image.xSize, in_image.ySize,1,1,1); 
-  
+
+  simg denoised(image.xSize, image.ySize, 0); // Denoised image
+  simg weights(image.xSize, image.ySize, 0);  // Matrix with accumulated group weights
+
+  int patch_radius(8);    // Patch radius (size=patch_radius*2+1)
+  int window_radius(20);  // Search window (size=window_radius*2+1)
+  float sim_th(100.0);    // Similarity threshold for the first step
+  int maxN(15);           // Maximal number of the patches in one group
+  upatches  vec_patches;  // Vector with patch center pixels ((x1,y1), (x2,y2),...)
+  // Vector with cumulative sum of patches in each group e.g. (5,8,13)
+  // which means fist group has 5 patches, second 3, third 5, etc...
+  upatchnum num_patches;    
+
   cout<<"Performing block matching..."<<flush;
-  blockMatching(in_image, patches, npatches, N, Th, maxN, k);
+  blockMatching(image, vec_patches, num_patches, patch_radius, window_radius, sim_th, maxN);
   cout<<"done"<<endl;
-  cout<<"Gathering patches together..."<<flush;
-  //for(unsigned i=0;i<npatches.size();i++)
-    simg group = gatherPatches(1, patches, npatches, in_image, k);
+
+  cout<<"Performing BM3D..."<<endl;
+  cout<<vec_patches.size()<<endl;
+  for(unsigned i=0;i<num_patches.size();i++){
+    simg group = gatherPatches(i, vec_patches, num_patches, image, patch_radius);
+    CImg<unsigned char> test(group.data.data(), group.xSize, group.ySize, group.zSize, 1,1);
+    test.display();
+    // coeff = waveletGroupTransform(group);
+    // th_coeff = thresholdCoeff(coeff, hard_th, group_weight);
+    // rec_group = inverseWaveletGroupTransform(th_coeff);
+    // aggregate(denoised, weights, vec_patches, num_patches, rec_group, group_weight);
+  }
   cout<<"done"<<endl;
-  exit(0);
-  cout<<"Performing wavelet2DTransform..."<<flush;
-  simg coeff(in_image.xSize, in_image.ySize, 0);
-  wavelet2DTransform(coeff, in_image);
-  cout<<"done"<<endl;
-  int retained(0);
-  waveletI2DTransform(in_image, coeff, 0, retained);
-  CImg<unsigned char> abc(in_image.data.data(), in_image.xSize, in_image.ySize,1,1,1); 
-
-  simg coeffx(coeff.xSize,coeff.ySize,0);
-  simg coeffy(coeff.xSize,coeff.ySize,0);
-  wavelet1DTransform(coeffx, in_image, 1);
-  wavelet1DTransform(coeffy, in_image, 2);
-
-  simg coeffxy(coeff.xSize,coeff.ySize,0);
-  simg coeffyx(coeff.xSize,coeff.ySize,0);
-  wavelet1DTransform(coeffxy, coeffx, 2);
-  wavelet1DTransform(coeffyx, coeffy, 1);
-
-  simg one(coeff.xSize,coeff.ySize,0);
-  simg two(coeff.xSize,coeff.ySize,0);
-  waveletI1DTransform(one,coeffxy, 2);
-  waveletI1DTransform(two,one, 1);
-  CImg<unsigned char> onedinverse(two.data.data(), coeff.xSize, coeff.ySize,1,1,1); onedinverse.display();
-  CImg<unsigned char> diff6=orig-onedinverse; diff6.display();
-
-  CImg<unsigned char> debug0(coeff.data.data(), coeff.xSize, coeff.ySize,1,1,1); debug0.display(disp1);
-  CImg<unsigned char> debug3(coeffxy.data.data(), coeff.xSize, coeff.ySize,1,1,1); debug3.display(disp2);
-  CImg<unsigned char> debug4(coeffyx.data.data(), coeff.xSize, coeff.ySize,1,1,1); debug4.display(disp3);
-  cout << "Difference between two" <<endl;
-  CImg<unsigned char> diff = (debug3-debug4); diff.display();
-  simg simgxy(coeff.xSize, coeff.ySize, 0), simgyx(coeff.xSize, coeff.ySize,0);
-  waveletI2DTransform(simgxy, coeffxy, 0, retained);
-  CImg<unsigned char> imgxy(simgxy.data.data(), coeff.xSize, coeff.ySize,1,1,1); 
-  waveletI2DTransform(simgyx, coeffyx, 0, retained);
-  CImg<unsigned char> imgyx(simgyx.data.data(), coeff.xSize, coeff.ySize,1,1,1);
-  cout << "Difference between orig and imgxy" <<endl;
-  CImg<unsigned char> diff1 =orig-imgxy; diff1.display();
-  cout << "Difference between orig and imgyx" <<endl;
-  CImg<unsigned char> diff2=orig-imgyx; diff2.display();
-  cout << "Difference between orig and 2D tranform" <<endl;
-  CImg<unsigned char> diff3=orig-abc; diff3.display();
-  cout << "Difference between 2D and imgxy" <<endl;
-  CImg<unsigned char> diff4=debug0-debug3; diff4.display();
-  cout << "Difference between 2D and imgyx" <<endl;
-  CImg<unsigned char> diff5=debug0-debug4; diff5.display();
-  cout << "Difference thresholded 2D and 1D" <<endl;
-  CImg<unsigned char> diff7=abc-onedinverse; diff7.display();
-  //simg coeff2(coeff, coeff.xSize, coeff.ySize);
-  //wavelet1DTransform(coeff, coeff2, 2);
-  // tranformThresholdingITransform
-  // Aggregation
-  writePGM("denoised.pgm", in_image);
+  // denoised /= weights;
+  //writePGM("denoised.pgm", denoised);
 
   return EXIT_SUCCESS;
 }
