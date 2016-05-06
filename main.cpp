@@ -22,20 +22,20 @@ typedef vector<int> upatchnum;
 CImgDisplay disp1, disp2, disp3, disp4;
 
 // Simple image class
-class simg{
+class SImg{
 public:
-  inline simg(): xSize(0), ySize(0), zSize(0), maxVal(0) {  }
-  inline simg(int width, int height, int depth, unsigned char initialValue): xSize(width), ySize(height), zSize(depth), maxVal(255) {
+  inline SImg(): xSize(0), ySize(0), zSize(0), maxVal(0) {  }
+  inline SImg(int width, int height, int depth, unsigned char initialValue): xSize(width), ySize(height), zSize(depth), maxVal(255) {
   size=xSize*ySize*zSize; 
   data.resize(size);
   std::fill(data.begin(), data.end(), initialValue);
   };
-  inline simg(int width, int height, unsigned char initialValue): xSize(width), ySize(height), zSize(1), maxVal(255) {
+  inline SImg(int width, int height, unsigned char initialValue): xSize(width), ySize(height), zSize(1), maxVal(255) {
   size=xSize*ySize*zSize; 
   data.resize(size);
   std::fill(data.begin(), data.end(), initialValue);
   };
-  inline simg(const simg &in_img, int width, int height, int channels=0, int maxVal=255): xSize(width), ySize(height), zSize(channels), maxVal(maxVal){
+  inline SImg(const SImg &in_img, int width, int height, int channels=0, int maxVal=255): xSize(width), ySize(height), zSize(channels), maxVal(maxVal){
     data = in_img.data;
     size = xSize*ySize*zSize;
   };
@@ -67,7 +67,7 @@ public:
 };
 
 bool readPGM(const string &filename, 
-             simg &image)
+             SImg &image)
 {
   ifstream File(filename.c_str(), ifstream::binary);
   int length;
@@ -82,7 +82,7 @@ bool readPGM(const string &filename,
 }
 
 bool writePGM(const string &filename, 
-              const simg &image)
+              const SImg &image)
 {
   std::ofstream File(filename.c_str());
   File << "P5\n" << image.xSize << " " << image.ySize << "\n"<< image.maxVal <<"\n";
@@ -91,7 +91,7 @@ bool writePGM(const string &filename,
   return true;
 }
 
-float dist(simg &image, 
+float dist(SImg &image, 
            int patch_radius, 
            int2 p1, // Reference patch
            int2 p2)
@@ -107,7 +107,7 @@ float dist(simg &image,
   return dist/patch_radius/patch_radius;
 }
 
-void blockMatching(simg &image, 
+void blockMatching(SImg &image, 
                    upatches &vec_patches, 
                    upatchnum &num_patches, 
                    int patch_radius,
@@ -160,15 +160,15 @@ void blockMatching(simg &image,
   
 }
 
-void wavelet2DTransform( simg &coeff, const simg &image){
-   simg C(image, image.xSize, image.ySize);
+void wavelet2DTransform( SImg &coeff, const SImg &image){
+   SImg C(image, image.xSize, image.ySize);
    int xsize=image.xSize;
    int hxsize=image.xSize/2;
    int hysize=image.ySize/2;
-   simg CK(hxsize, hysize, 0);
-   simg DH(hxsize, hysize, 0);
-   simg DV(hxsize, hysize, 0);
-   simg DD(hxsize, hysize, 0);
+   SImg CK(hxsize, hysize, 0);
+   SImg DH(hxsize, hysize, 0);
+   SImg DV(hxsize, hysize, 0);
+   SImg DD(hxsize, hysize, 0);
    for(int y=0; y<hysize; y++)
      for(int x=0; x<hxsize; x++) {
        CK.data[idx(x,y,hxsize)]=0.25*(C.data[idx(2*x,2*y,xsize)]+C.data[idx(2*x+1,2*y,xsize)]+C.data[idx(2*x,2*y+1,xsize)]+C.data[idx(2*x+1,2*y+1,xsize)]);
@@ -187,13 +187,13 @@ void wavelet2DTransform( simg &coeff, const simg &image){
    //sCK.display();
 }
 bool hardThreshold(unsigned char &in, const unsigned char &TH){ if (in<TH) {in = 0; return true;} else { return false; } }
-void waveletI2DTransform( simg &image, simg &coeff, const unsigned char &TH, int &retained){
+void waveletI2DTransform( SImg &image, SImg &coeff, const unsigned char &TH, int &retained){
   int hxsize = image.xSize/2;
   int hysize = image.ySize/2;
-  simg CK(hxsize, hysize, 0);
-  simg DH(hxsize, hysize, 0);
-  simg DV(hxsize, hysize, 0);
-  simg DD(hxsize, hysize, 0);
+  SImg CK(hxsize, hysize, 0);
+  SImg DH(hxsize, hysize, 0);
+  SImg DV(hxsize, hysize, 0);
+  SImg DD(hxsize, hysize, 0);
   int thresholded_count(0);
   for (int y = 0; y < CK.ySize; y++)
      for (int x = 0; x < CK.xSize; x++){
@@ -222,7 +222,7 @@ void waveletI2DTransform( simg &image, simg &coeff, const unsigned char &TH, int
    CImg<unsigned char> sCK(image.data.data(), image.xSize, image.ySize,1,1,1);
    sCK.display();
 }
-void wavelet1DTransform(simg &coeff, simg &image, int dim){
+void wavelet1DTransform(SImg &coeff, SImg &image, int dim){
   int xsize = image.xSize;
   int ysize = image.ySize;
   int hxsize = image.xSize/2;
@@ -235,8 +235,8 @@ void wavelet1DTransform(simg &coeff, simg &image, int dim){
      dimxsize=xsize;
      dimysize=hysize;
   }
-  simg CK (dimxsize, dimysize, 0);
-  simg DK (dimxsize, dimysize, 0);
+  SImg CK (dimxsize, dimysize, 0);
+  SImg DK (dimxsize, dimysize, 0);
   for(int y=0; y<dimysize; ++y)
     for(int x=0; x<dimxsize; ++x){
       // ...
@@ -262,7 +262,7 @@ void wavelet1DTransform(simg &coeff, simg &image, int dim){
    //CImg<unsigned char> sDK(DK.data.data(), DK.xSize, DK.ySize,1,1,1);
    //sDK.display();
 }
-void waveletI1DTransform(simg &image, simg &coeff, int dim){
+void waveletI1DTransform(SImg &image, SImg &coeff, int dim){
   int xsize = coeff.xSize;
   int ysize = coeff.ySize;
   int hxsize = coeff.xSize/2;
@@ -300,7 +300,7 @@ inline pair<int2, int2> getPatchBeginEnd(int2 p, int k, int xSize, int ySize){
   return make_pair(a, b);
 }
 
-inline void drawGroup(simg &image, upatches &patches, upatchnum &npatches, int k, int xSize, int ySize, int start, int Np){
+inline void drawGroup(SImg &image, upatches &patches, upatchnum &npatches, int k, int xSize, int ySize, int start, int Np){
     uimg img_copy(image.data);
     CImg<unsigned char> img(img_copy.data(),image.xSize,image.ySize,1,1,1);
     const unsigned char c_mat[] = {255, 0, 0};
@@ -311,21 +311,21 @@ inline void drawGroup(simg &image, upatches &patches, upatchnum &npatches, int k
     img.display(disp1);
 }
 
-simg gatherPatches(int idx, 
+SImg gatherPatches(int idx, 
                    upatches &vec_patches, 
                    upatchnum &num_patches, 
-                   simg &image, 
+                   SImg &image, 
                    int patch_radius){
   int N(0);
   if(idx==0) N=num_patches[idx];
   else N=num_patches[idx]-num_patches[idx-1];
 
   int patch_size=patch_radius*2+1;
-  simg gathered_patches(patch_size, patch_size, N, 0);
+  SImg gathered_patches(patch_size, patch_size, N, 0);
 
   int start = num_patches[idx]-N;
   int end   = num_patches[idx];
-  cout << "Start patch "<<start<<" end patch "<<end<<endl;
+  cout << "Start patch "<<start<<" end patch "<<end<<" number "<<N<<endl;
 
   for(int z=0;z<gathered_patches.zSize;++z)
   {
@@ -337,16 +337,22 @@ simg gatherPatches(int idx,
   }
   return gathered_patches;
 }
+SImg waveletGroupTransform(SImg &group){
+  SImg res(group.xSize, group.ySize, group.zSize, 0);
+
+  return res;
+}
+
 int main(){
 
-  simg image; // Original noisy image 
+  SImg image; // Original noisy image 
   cout<<"Reading image..."<<flush;
   if(! readPGM("barbara.pgm", image) ){ cerr << "Failed to open the image.\n"; return EXIT_FAILURE;}
   cout<<"done"<<endl;
 
 
-  simg denoised(image.xSize, image.ySize, 0); // Denoised image
-  simg weights(image.xSize, image.ySize, 0);  // Matrix with accumulated group weights
+  SImg denoised(image.xSize, image.ySize, 0); // Denoised image
+  SImg weights(image.xSize, image.ySize, 0);  // Matrix with accumulated group weights
 
   int patch_radius(8);    // Patch radius (size=patch_radius*2+1)
   int window_radius(20);  // Search window (size=window_radius*2+1)
@@ -364,10 +370,10 @@ int main(){
   cout<<"Performing BM3D..."<<endl;
   cout<<vec_patches.size()<<endl;
   for(unsigned i=0;i<num_patches.size();i++){
-    simg group = gatherPatches(i, vec_patches, num_patches, image, patch_radius);
-    CImg<unsigned char> test(group.data.data(), group.xSize, group.ySize, group.zSize, 1,1);
-    test.display();
-    // coeff = waveletGroupTransform(group);
+    SImg group = gatherPatches(i, vec_patches, num_patches, image, patch_radius);
+    //CImg<unsigned char> test(group.data.data(), group.xSize, group.ySize, group.zSize, 1,1);
+    //test.display();
+    SImg coeff = waveletGroupTransform(group);
     // th_coeff = thresholdCoeff(coeff, hard_th, group_weight);
     // rec_group = inverseWaveletGroupTransform(th_coeff);
     // aggregate(denoised, weights, vec_patches, num_patches, rec_group, group_weight);
