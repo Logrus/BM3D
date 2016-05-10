@@ -1,4 +1,7 @@
+#include <cassert>
+#include <ctime>
 #include <iostream>
+#include <iomanip>
 #include <cstdlib>
 #include <vector>
 #include <string>
@@ -8,12 +11,15 @@
 #include <vector_functions.h>
 #include "CImg.h"
 #include <omp.h>
+#include <random>
+#include <limits>
 using namespace std;
 using namespace cimg_library;
 
 #define idx(x,y,x_size) ((x) + (y)*(x_size))
 #define idx3(x,y,z,x_size,y_size) ((x) + ((y)+(y_size)*(z))*(x_size))
 #define CLIP(minv,val,maxv) (min((maxv), max((minv),(val))))
+#define ISQRT2 0.707106781186547524400844362104849039284835937688474036588f
 
 typedef vector<unsigned char> uimg;
 typedef vector<int2> upatches;
@@ -21,31 +27,45 @@ typedef vector<int> upatchnum;
 
 CImgDisplay disp1, disp2, disp3, disp4;
 
+struct Parameters{
+  string filename = "barbara.pgm";
+  int patch_radius=6;   // Patch radius (size=patch_radius*2)
+  int window_radius=20; // Search window (size=window_radius*2+1)
+  float sim_th=500.0;   // Similarity threshold for the first step
+  int maxN=35;          // Maximal number of the patches in one group
+  float hard_th=1000.0; // Hard schrinkage threshold
+  float sigma=25.0;
+  float noise_sigma=25.0;
+  float garotte=false;
+  bool add_noise_ = false;
+};
+
 // Simple image class
+template<typename T>
 class SImg{
 public:
   inline SImg(): xSize(0), ySize(0), zSize(0), maxVal(0) {  }
-  inline SImg(int width, int height, int depth, unsigned char initialValue): xSize(width), ySize(height), zSize(depth), maxVal(255) {
+  inline SImg(int width, int height, int depth, T initialValue): xSize(width), ySize(height), zSize(depth), maxVal(255) {
   size=xSize*ySize*zSize; 
   data.resize(size);
   std::fill(data.begin(), data.end(), initialValue);
   };
-  inline SImg(int width, int height, unsigned char initialValue): xSize(width), ySize(height), zSize(1), maxVal(255) {
+  inline SImg(int width, int height, T initialValue): xSize(width), ySize(height), zSize(1), maxVal(255) {
   size=xSize*ySize*zSize; 
   data.resize(size);
   std::fill(data.begin(), data.end(), initialValue);
   };
-  inline SImg(const SImg &in_img, int width, int height, int channels=0, int maxVal=255): xSize(width), ySize(height), zSize(channels), maxVal(maxVal){
+  inline SImg(const SImg<T> &in_img, int width, int height, int channels=0, T maxVal=255): xSize(width), ySize(height), zSize(channels), maxVal(maxVal){
     data = in_img.data;
     size = xSize*ySize*zSize;
   };
-  inline unsigned char& operator()(const int ax, const int ay, const int az)  {
+  inline T& operator()(const int ax, const int ay, const int az)  {
     int cx = CLIP(0, ax, xSize);
     int cy = CLIP(0, ay, ySize);
     int cz = CLIP(0, az, zSize);
     return data[idx3(cx,cy,cz,xSize,ySize)];
   }
-  inline unsigned char& operator()(const int ax, const int ay)  {
+  inline T& operator()(const int ax, const int ay)  {
     int cx = CLIP(0, ax, xSize);
     int cy = CLIP(0, ay, ySize);
     return data[idx(cx,cy,xSize)];
@@ -58,7 +78,18 @@ public:
     size = xSize*ySize*zSize;
     data.resize(size);
   };
-  uimg data;
+  void normalize(T n_min, T n_max){
+    T c_min(numeric_limits<T>::max()), c_max(numeric_limits<T>::min());
+    for(int i=0;i<data.size();++i){
+      if( data[i] < c_min ) c_min = data[i];
+      if( data[i] > c_max ) c_max = data[i];
+    }
+
+    for(int i=0;i<data.size();++i){
+      data[i] = ((data[i]-c_min)/(c_max-c_min))*n_max;
+    }
+  }
+  vector<T> data;
   int xSize;
   int ySize;
   int zSize;
@@ -67,7 +98,7 @@ public:
 };
 
 bool readPGM(const string &filename, 
-             SImg &image)
+             SImg<unsigned char> &image)
 {
   ifstream File(filename.c_str(), ifstream::binary);
   int length;
@@ -82,7 +113,7 @@ bool readPGM(const string &filename,
 }
 
 bool writePGM(const string &filename, 
-              const SImg &image)
+              const SImg<unsigned char> &image)
 {
   std::ofstream File(filename.c_str());
   File << "P5\n" << image.xSize << " " << image.ySize << "\n"<< image.maxVal <<"\n";
@@ -91,23 +122,29 @@ bool writePGM(const string &filename,
   return true;
 }
 
-float dist(SImg &image, 
+bool comp2float(const float &v1, const float &v2){
+  return fabs(v1-v2) < 0.0001f;
+
+}
+
+float dist(SImg<float> &image, 
            int patch_radius, 
            int2 p1, // Reference patch
            int2 p2)
 {
   float dist(0);
-  for(int y=-patch_radius; y<=patch_radius; ++y)
-    for(int x=-patch_radius; x<=patch_radius; ++x){
+  for(int y=-patch_radius; y<patch_radius; ++y)
+    for(int x=-patch_radius; x<patch_radius; ++x){
       // Note that image automatically clamps borders
       float tmp = image(p1.x+x, p1.y+y) - image(p2.x+x, p2.y+y);
       dist += tmp*tmp;
     }
   // Normalize
-  return dist/patch_radius/patch_radius;
+  return dist/static_cast<float>(patch_radius*patch_radius);
 }
 
-void blockMatching(SImg &image, 
+
+void blockMatching(SImg<float> &image, 
                    upatches &vec_patches, 
                    upatchnum &num_patches, 
                    int patch_radius,
@@ -117,7 +154,7 @@ void blockMatching(SImg &image,
 {
   int xSize = image.xSize;
   int ySize = image.ySize;
-  int step=patch_radius/4; 
+  int step=3; 
   
   // Go through the image with step
   for (int j=0; j<image.ySize; j+=step)
@@ -139,7 +176,7 @@ void blockMatching(SImg &image,
         for (int wx = wxb; wx <= wxe; wx++)
         {
             // Cap max size in group
-            if(num_patches[curr_i]==maxN) break;
+            if(num_patches[curr_i]==maxN) continue;
             // Exclude itself
             if(i==wx && j==wy) continue;
 
@@ -160,21 +197,21 @@ void blockMatching(SImg &image,
   
 }
 
-void wavelet2DTransform( SImg &coeff, const SImg &image){
-   SImg C(image, image.xSize, image.ySize);
+void wavelet2DTransform( SImg<float> &coeff, const SImg<float> &image){
+   SImg<float> C(image, image.xSize, image.ySize);
    int xsize=image.xSize;
    int hxsize=image.xSize/2;
    int hysize=image.ySize/2;
-   SImg CK(hxsize, hysize, 0);
-   SImg DH(hxsize, hysize, 0);
-   SImg DV(hxsize, hysize, 0);
-   SImg DD(hxsize, hysize, 0);
+   SImg<float> CK(hxsize, hysize, 0);
+   SImg<float> DH(hxsize, hysize, 0);
+   SImg<float> DV(hxsize, hysize, 0);
+   SImg<float> DD(hxsize, hysize, 0);
    for(int y=0; y<hysize; y++)
      for(int x=0; x<hxsize; x++) {
-       CK.data[idx(x,y,hxsize)]=0.25*(C.data[idx(2*x,2*y,xsize)]+C.data[idx(2*x+1,2*y,xsize)]+C.data[idx(2*x,2*y+1,xsize)]+C.data[idx(2*x+1,2*y+1,xsize)]);
-       DH.data[idx(x,y,hxsize)]=0.25*(C.data[idx(2*x,2*y,xsize)]+C.data[idx(2*x,2*y+1,xsize)]-C.data[idx(2*x+1,2*y,xsize)]-C.data[idx(2*x+1,2*y+1,xsize)]);
-       DV.data[idx(x,y,hxsize)]=0.25*(C.data[idx(2*x,2*y,xsize)]+C.data[idx(2*x+1,2*y,xsize)]-C.data[idx(2*x,2*y+1,xsize)]-C.data[idx(2*x+1,2*y+1,xsize)]);
-       DD.data[idx(x,y,hxsize)]=0.25*(C.data[idx(2*x,2*y,xsize)]-C.data[idx(2*x+1,2*y,xsize)]-C.data[idx(2*x,2*y+1,xsize)]+C.data[idx(2*x+1,2*y+1,xsize)]);
+       CK.data[idx(x,y,hxsize)]=0.5*(C.data[idx(2*x,2*y,xsize)]+C.data[idx(2*x+1,2*y,xsize)]+C.data[idx(2*x,2*y+1,xsize)]+C.data[idx(2*x+1,2*y+1,xsize)]);
+       DH.data[idx(x,y,hxsize)]=0.5*(C.data[idx(2*x,2*y,xsize)]+C.data[idx(2*x,2*y+1,xsize)]-C.data[idx(2*x+1,2*y,xsize)]-C.data[idx(2*x+1,2*y+1,xsize)]);
+       DV.data[idx(x,y,hxsize)]=0.5*(C.data[idx(2*x,2*y,xsize)]+C.data[idx(2*x+1,2*y,xsize)]-C.data[idx(2*x,2*y+1,xsize)]-C.data[idx(2*x+1,2*y+1,xsize)]);
+       DD.data[idx(x,y,hxsize)]=0.5*(C.data[idx(2*x,2*y,xsize)]-C.data[idx(2*x+1,2*y,xsize)]-C.data[idx(2*x,2*y+1,xsize)]+C.data[idx(2*x+1,2*y+1,xsize)]);
      }
    for (int y=0; y<CK.ySize; y++)
      for (int x=0; x<CK.xSize; x++){
@@ -186,24 +223,19 @@ void wavelet2DTransform( SImg &coeff, const SImg &image){
    //CImg<unsigned char> sCK(coeff.data.data(), coeff.xSize, coeff.ySize,1,1,1);
    //sCK.display();
 }
-bool hardThreshold(unsigned char &in, const unsigned char &TH){ if (in<TH) {in = 0; return true;} else { return false; } }
-void waveletI2DTransform( SImg &image, SImg &coeff, const unsigned char &TH, int &retained){
+void waveletI2DTransform( SImg<float> &image, SImg<float> &coeff){
   int hxsize = image.xSize/2;
   int hysize = image.ySize/2;
-  SImg CK(hxsize, hysize, 0);
-  SImg DH(hxsize, hysize, 0);
-  SImg DV(hxsize, hysize, 0);
-  SImg DD(hxsize, hysize, 0);
-  int thresholded_count(0);
+  SImg<float> CK(hxsize, hysize, 0);
+  SImg<float> DH(hxsize, hysize, 0);
+  SImg<float> DV(hxsize, hysize, 0);
+  SImg<float> DD(hxsize, hysize, 0);
   for (int y = 0; y < CK.ySize; y++)
      for (int x = 0; x < CK.xSize; x++){
        CK(x,y)=coeff(x,y);
-       unsigned char DHv = coeff(x+CK.xSize,y);
-       unsigned char DVv = coeff(x,y+CK.xSize);
-       unsigned char DDv = coeff(x+CK.xSize,y+CK.xSize);
-       if(hardThreshold(DHv,TH)) thresholded_count++;
-       if(hardThreshold(DVv,TH)) thresholded_count++;
-       if(hardThreshold(DDv,TH)) thresholded_count++;
+       float DHv = coeff(x+CK.xSize,y);
+       float DVv = coeff(x,y+CK.xSize);
+       float DDv = coeff(x+CK.xSize,y+CK.xSize);
        DH(x,y)=DHv;
        DV(x,y)=DVv;
        DD(x,y)=DDv;
@@ -211,84 +243,83 @@ void waveletI2DTransform( SImg &image, SImg &coeff, const unsigned char &TH, int
    for (int y = 0; y < CK.ySize; y++)
      for (int x = 0; x < CK.xSize; x++) 
      {
-        image(2*x,2*y)    =CK(x,y)+DH(x,y)+DV(x,y)+DD(x,y);
-        image(2*x+1,2*y)  =CK(x,y)-DH(x,y)+DV(x,y)-DD(x,y);
-        image(2*x,2*y+1)  =CK(x,y)+DH(x,y)-DV(x,y)-DD(x,y);
-        image(2*x+1,2*y+1)=CK(x,y)-DH(x,y)-DV(x,y)+DD(x,y);
+        image(2*x,2*y)    =ISQRT2*(CK(x,y)+DH(x,y)+DV(x,y)+DD(x,y));
+        image(2*x+1,2*y)  =ISQRT2*(CK(x,y)-DH(x,y)+DV(x,y)-DD(x,y));
+        image(2*x,2*y+1)  =ISQRT2*(CK(x,y)+DH(x,y)-DV(x,y)-DD(x,y));
+        image(2*x+1,2*y+1)=ISQRT2*(CK(x,y)-DH(x,y)-DV(x,y)+DD(x,y));
      }
-   // Count of non-zeroed coefficients (excluding CK matrix)
-   retained=(image.size-CK.size-thresholded_count);
-   cout<<"Retained: "<<retained<<" coeffs, out of "<<image.size-CK.size<<endl;
-   CImg<unsigned char> sCK(image.data.data(), image.xSize, image.ySize,1,1,1);
-   sCK.display();
 }
-void wavelet1DTransform(SImg &coeff, SImg &image, int dim){
-  int xsize = image.xSize;
-  int ysize = image.ySize;
-  int hxsize = image.xSize/2;
-  int hysize = image.ySize/2;
-  int dimxsize(0),dimysize(0);
+void wavelet1DTransform(SImg<float> &coeff, SImg<float> &image, int dim){
+  int dimxsize = image.xSize;
+  int dimysize = image.ySize;
+  int dimzsize = image.zSize;
   if (dim==1){
-     dimxsize=hxsize;
-     dimysize=ysize;
+     dimxsize/=2;
   } else if (dim==2){
-     dimxsize=xsize;
-     dimysize=hysize;
+     dimysize/=2;
+  } else if (dim==3){
+     dimzsize/=2;
   }
-  SImg CK (dimxsize, dimysize, 0);
-  SImg DK (dimxsize, dimysize, 0);
-  for(int y=0; y<dimysize; ++y)
-    for(int x=0; x<dimxsize; ++x){
-      // ...
-      if (dim==1){
-        DK(x,y) = 0.5*(image(2*x,y) - image(2*x+1,y));
-        CK(x,y) = 0.5*(image(2*x,y) + image(2*x+1,y));
-      } else if(dim==2){
-        DK(x,y) = 0.5*(image(x,2*y) - image(x,2*y+1));
-        CK(x,y) = 0.5*(image(x,2*y) + image(x,2*y+1));
-      }
+  SImg<float> CK (dimxsize, dimysize, dimzsize, 0);
+  SImg<float> DK (dimxsize, dimysize, dimzsize, 0);
+  for(int z=0; z<dimzsize; ++z)
+    for(int y=0; y<dimysize; ++y)
+      for(int x=0; x<dimxsize; ++x){
+        if(dim==1){
+          DK(x,y,z) = ISQRT2*(image(x*2,y,z) - image(x*2+1,y,z));
+          CK(x,y,z) = ISQRT2*(image(x*2,y,z) + image(x*2+1,y,z));
+        } else if(dim==2){
+          DK(x,y,z) = ISQRT2*(image(x,y*2,z) - image(x,y*2+1,z));
+          CK(x,y,z) = ISQRT2*(image(x,y*2,z) + image(x,y*2+1,z));
+        } else if(dim==3){
+          DK(x,y,z) = ISQRT2*(image(x,y,z*2) - image(x,y,z*2+1));
+          CK(x,y,z) = ISQRT2*(image(x,y,z*2) + image(x,y,z*2+1));
+        }
     }
-   // Write coeff
+ // Write coeff
+ for(int z=0; z<dimzsize; ++z)
    for(int y=0; y<dimysize; ++y)
      for(int x=0; x<dimxsize; ++x){
        if (dim==1){
-          coeff(x+dimxsize,y)=DK(x,y);
-          coeff(x,y)=CK(x,y);
+          coeff(x+dimxsize,y,z)=DK(x,y,z);
+          coeff(x,y,z)=CK(x,y,z);
         } else if(dim==2){
-          coeff(x,y+dimysize)=DK(x,y);
-          coeff(x,y)=CK(x,y);
-        }
+          coeff(x,y+dimysize,z)=DK(x,y,z);
+          coeff(x,y,z)=CK(x,y,z);
+        } else if(dim==3){
+            coeff(x,y,z+dimzsize)=DK(x,y,z);
+            coeff(x,y,z)=CK(x,y,z);
+          }
      }
    //CImg<unsigned char> sDK(DK.data.data(), DK.xSize, DK.ySize,1,1,1);
    //sDK.display();
 }
-void waveletI1DTransform(SImg &image, SImg &coeff, int dim){
-  int xsize = coeff.xSize;
-  int ysize = coeff.ySize;
-  int hxsize = coeff.xSize/2;
-  int hysize = coeff.ySize/2;
-  int dimxsize(0),dimysize(0);
+void waveletI1DTransform(SImg<float> &image, SImg<float> &coeff, int dim){
+  int dimxsize = coeff.xSize;
+  int dimysize = coeff.ySize;
+  int dimzsize = coeff.zSize;
   if (dim==1){
-     dimxsize=hxsize;
-     dimysize=ysize;
+     dimxsize/=2;
   } else if (dim==2){
-     dimxsize=xsize;
-     dimysize=hysize;
+     dimysize/=2;
+  } else if (dim==3){
+     dimzsize/=2;
   }
-  for(int y=0; y<dimysize; ++y)
-    for(int x=0; x<dimxsize; ++x){
-      if (dim==1){
-        // C           =     CK           DK
-        unsigned char DK = coeff(x+dimxsize, y);
-        image(2*x,y)   =coeff(x,y) + DK;
-        image(2*x+1,y) =coeff(x,y) - DK;
-      } else if(dim==2){
-        // C           =     CK           DK
-        unsigned char DK = coeff(x, y+dimysize);
-        image(x,2*y)   =coeff(x,y) + DK;
-        image(x,2*y+1) =coeff(x,y) - DK;
+  for(int z=0; z<dimzsize; ++z)
+    for(int y=0; y<dimysize; ++y)
+      for(int x=0; x<dimxsize; ++x){
+          // C           =     CK                            DK
+        if (dim==1){
+          image(2*x,y,z)   =ISQRT2*(coeff(x,y,z) + coeff(x+dimxsize,y,z));
+          image(2*x+1,y,z) =ISQRT2*(coeff(x,y,z) - coeff(x+dimxsize,y,z));
+        } else if(dim==2){
+          image(x,2*y,z)   =ISQRT2*(coeff(x,y,z) + coeff(x,y+dimysize,z));
+          image(x,2*y+1,z) =ISQRT2*(coeff(x,y,z) - coeff(x,y+dimysize,z));
+        } else if (dim==3){
+          image(x,y,2*z)   =ISQRT2*(coeff(x,y,z) + coeff(x,y,z+dimzsize));
+          image(x,y,2*z+1) =ISQRT2*(coeff(x,y,z) - coeff(x,y,z+dimzsize));
+        }
       }
-    }
 }
 
 inline pair<int2, int2> getPatchBeginEnd(int2 p, int k, int xSize, int ySize){
@@ -300,9 +331,9 @@ inline pair<int2, int2> getPatchBeginEnd(int2 p, int k, int xSize, int ySize){
   return make_pair(a, b);
 }
 
-inline void drawGroup(SImg &image, upatches &patches, upatchnum &npatches, int k, int xSize, int ySize, int start, int Np){
-    uimg img_copy(image.data);
-    CImg<unsigned char> img(img_copy.data(),image.xSize,image.ySize,1,1,1);
+inline void drawGroup(SImg<float> &image, upatches &patches, upatchnum &npatches, int k, int xSize, int ySize, int start, int Np){
+    vector<float> img_copy(image.data);
+    CImg<float> img(img_copy.data(),image.xSize,image.ySize,1,1,1);
     const unsigned char c_mat[] = {255, 0, 0};
     for(int i=start; i<Np;++i){
         pair<int2,int2> ref = getPatchBeginEnd(patches[i], k, xSize, ySize); 
@@ -311,76 +342,243 @@ inline void drawGroup(SImg &image, upatches &patches, upatchnum &npatches, int k
     img.display(disp1);
 }
 
-SImg gatherPatches(int idx, 
+SImg<float> gatherPatches(int idx, 
                    upatches &vec_patches, 
                    upatchnum &num_patches, 
-                   SImg &image, 
+                   SImg<float> &image, 
                    int patch_radius){
   int N(0);
   if(idx==0) N=num_patches[idx];
   else N=num_patches[idx]-num_patches[idx-1];
+  int append=0;
+  if(N%2) append=1;
 
-  int patch_size=patch_radius*2+1;
-  SImg gathered_patches(patch_size, patch_size, N, 0);
+  int patch_size=patch_radius*2;
+  SImg<float> gathered_patches(patch_size, patch_size, N+append, 0);
 
-  int start = num_patches[idx]-N;
-  int end   = num_patches[idx];
-  cout << "Start patch "<<start<<" end patch "<<end<<" number "<<N<<endl;
+  int start=num_patches[idx]-N;
+  //int end   = num_patches[idx];
+  //cout << "Start patch "<<start<<" end patch "<<end<<" number real "<<N<<" rounded "<<N+append<<endl;
 
   for(int z=0;z<gathered_patches.zSize;++z)
   {
     int2 cp = vec_patches[start+z];
     for(int y=0;y<gathered_patches.ySize;++y)
-      for(int x=0;x<gathered_patches.zSize;++x){
-        gathered_patches(x,y,z) = image(cp.x-patch_radius+x, cp.y-patch_radius+y);
+      for(int x=0;x<gathered_patches.xSize;++x){
+        if (z<N)
+          gathered_patches(x,y,z) = image(cp.x-patch_radius+x, cp.y-patch_radius+y);
+        else
+          gathered_patches(x,y,z) = 0;
       }
   }
   return gathered_patches;
 }
-SImg waveletGroupTransform(SImg &group){
-  SImg res(group.xSize, group.ySize, group.zSize, 0);
+SImg<float> waveletGroupTransform(SImg<float> &group){
+  SImg<float> res(group.xSize, group.ySize, group.zSize, 0);
+  SImg<float> coeff1(group.xSize, group.ySize, group.zSize, 0);
+  SImg<float> coeff2(group.xSize, group.ySize, group.zSize, 0);
+
+  wavelet1DTransform(coeff1, group, 1);
+  wavelet1DTransform(coeff2, coeff1, 2);
+  if (coeff2.zSize>1){
+    wavelet1DTransform(res, coeff2, 3);
+  }
+  else
+   res.data = coeff2.data;
 
   return res;
 }
+SImg<float> inverseWaveletGroupTransform(SImg<float> &coeff){
+  SImg<float> res(coeff.xSize, coeff.ySize, coeff.zSize, 0);
+  SImg<float> coeff1(coeff.xSize, coeff.ySize, coeff.zSize, 0);
+  SImg<float> coeff2(coeff.xSize, coeff.ySize, coeff.zSize, 0);
 
-int main(){
+  if (coeff.zSize>1){
+    waveletI1DTransform(coeff1, coeff, 3);
+  }
+  else
+    coeff1.data = coeff.data;
+  waveletI1DTransform(coeff2, coeff1, 2);
+  waveletI1DTransform(res, coeff2, 1);
 
-  SImg image; // Original noisy image 
+  return res;
+}
+template<typename T>
+void assertGroups(SImg<T> &group1, SImg<T> &group2){
+  assert(group1.xSize==group2.xSize);
+  assert(group1.ySize==group2.ySize);
+  assert(group1.zSize==group2.zSize);
+  for(int z=0;z<group1.zSize;++z)
+    for(int y=0;y<group1.ySize;++y)
+      for(int x=0;x<group1.xSize;++x){
+        if ( !comp2float(group1(x,y,z), group2(x,y,z)) )
+          cout<<fixed<<setprecision(6)<<"x "<<x<<" y "<<y<<" z "<<z<<" val1 "<<group1(x,y,z)<<" val2 "<<group2(x,y,z)<<endl;
+        assert( comp2float(group1(x,y,z), group2(x,y,z)) );
+      }
+  cout << "Assertion passed." << endl;
+}
+void simgUnsignedToFloat(SImg<float> &dst, SImg<unsigned char> &src)
+{
+  for(int z=0;z<dst.zSize;++z)
+    for(int y=0;y<dst.ySize;++y)
+      for(int x=0;x<dst.xSize;++x){
+        dst(x,y,z)=static_cast<float>(src(x,y,z));
+      }
+}
+void simgFloatToUnsigned(SImg<unsigned char> &dst, SImg<float> &src){
+  for(int z=0;z<dst.zSize;++z)
+    for(int y=0;y<dst.ySize;++y)
+      for(int x=0;x<dst.xSize;++x){
+        dst(x,y,z)=static_cast<unsigned char>(round(src(x,y,z)));
+      }
+}
+void thresholdCoeff( SImg<float> &coeff, Parameters &p, float &group_weight){
+  int count(0);
+  for(int z=0;z<coeff.zSize;++z)
+    for(int y=0;y<coeff.ySize;++y)
+      for(int x=0;x<coeff.xSize;++x){
+        if (z<coeff.zSize/2 && y<coeff.ySize/2 && x<coeff.xSize/2) continue;
+
+        float val = coeff(x,y,z);
+        if( fabs(val)<p.hard_th ){
+          // Hard thresholding
+          coeff(x,y,z) = 0;
+        } else { 
+          if(p.garotte)
+            coeff(x,y,z) = val-((p.hard_th*p.hard_th)/val);
+          count++;
+        }
+      }
+  if (count){
+    group_weight=1./(count*p.sigma*p.sigma);
+  } else {
+    group_weight=1;
+  }
+}
+void aggregate(int idx, SImg<float> &denoised, SImg<float> &weights,const upatches &vec_patches,const upatchnum &num_patches, SImg<float> &group, const float &group_weight, int patch_radius){
+  int N(0);
+  if(idx==0) N=num_patches[idx];
+  else N=num_patches[idx]-num_patches[idx-1];
+  int start = num_patches[idx]-N;
+
+  for(int z=start;z<num_patches[idx];++z)
+  {
+      int2 cp = vec_patches[z];
+      for(int y=-patch_radius;y<patch_radius;++y)
+        for(int x=-patch_radius;x<patch_radius;++x){
+            denoised(cp.x+x,cp.y+y) += group_weight*group(x+patch_radius, y+patch_radius, z-start);
+            weights(cp.x+x,cp.y+y) += group_weight;
+        }
+  }
+}
+void add_noise(SImg<float> &dst, SImg<float> &src, const float sigma){
+  default_random_engine generator;
+  normal_distribution<double> dist(0, sigma);
+  for(unsigned i=0; i<dst.data.size(); ++i){
+    dst.data[i] = src.data[i] + dist(generator); 
+  }
+}
+float psnr( SImg<float>& gt, SImg<float>& noisy )
+{
+  float max_signal = 255;
+  float sqr_err = 0;
+  for(int i=0;i<gt.size;++i)
+  {
+    float diff = gt.data[i] - noisy.data[i];
+    sqr_err += diff*diff;
+  }
+  float mse = sqr_err/gt.size;
+  float psnr = 10.f*log10(max_signal*max_signal/mse);
+  return psnr;
+}
+
+void read_parameters(int argc, char *argv[], Parameters &p){
+ if (argc==1){
+   cout<<argv[0]<<" image patch_radius window_radius sim_th maxN hard_th sigma"<<endl;
+   cout<<"performing with the default settings"<<endl;
+ } 
+
+ if(argc>=2) p.filename=argv[1];
+ if(argc>=3) p.patch_radius=atoi(argv[2]);
+ if(argc>=4) p.window_radius=atoi(argv[3]);
+ if(argc>=5) p.sim_th=atof(argv[4]);
+ if(argc>=6) p.maxN=atoi(argv[5]);
+ if(argc>=7) p.hard_th=atof(argv[6]);
+ if(argc>=8){ p.sigma=atof(argv[7]); }
+ if(argc>=9){ p.noise_sigma=atof(argv[8]); }
+ if(argc>=10){ p.garotte=atoi(argv[9]); }
+
+ cout<<"Parameters:"<<endl;
+ cout<<"          image: "<<p.filename.c_str()<<endl;
+ cout<<"   patch_radius: "<<p.patch_radius<<endl;
+ cout<<"  window_radius: "<<p.window_radius<<endl;
+ cout<<"         sim_th: "<<fixed<<setprecision(3)<<p.sim_th<<endl;
+ cout<<"           maxN: "<<p.maxN<<endl;
+ cout<<"        hard_th: "<<fixed<<setprecision(3)<<p.hard_th<<endl;
+ cout<<"          sigma: "<<fixed<<setprecision(3)<<p.sigma<<endl;
+ cout<<"    noise_sigma: "<<fixed<<setprecision(3)<<p.noise_sigma<<endl;
+ cout<<"        garotte: "<<fixed<<setprecision(3)<<p.garotte<<endl;
+}
+
+int main(int argc, char *argv[]){
+  // Take parameters
+  Parameters p;
+  read_parameters(argc, argv, p);
+  
+  SImg<unsigned char> raw_image; // Original image 
   cout<<"Reading image..."<<flush;
-  if(! readPGM("barbara.pgm", image) ){ cerr << "Failed to open the image.\n"; return EXIT_FAILURE;}
+  if(! readPGM(p.filename.c_str(), raw_image) ){ cerr << "Failed to open the image.\n"; return EXIT_FAILURE;}
   cout<<"done"<<endl;
 
+  SImg<float> original_image(raw_image.xSize, raw_image.ySize, raw_image.zSize, 0);
+  SImg<float> image(raw_image.xSize, raw_image.ySize, raw_image.zSize, 0);
+  simgUnsignedToFloat(original_image, raw_image);
+  add_noise(image, original_image, p.noise_sigma);
+  image.normalize(0, 255);
+  SImg<unsigned char> asb(raw_image.xSize, raw_image.ySize, raw_image.zSize, 0);
+  simgFloatToUnsigned(asb, image);
+  writePGM("noisy.pgm", asb);
+  CImg<float> noisy(image.data.data(), image.xSize, image.ySize, image.zSize, 1,1); noisy.display(disp1);
+  cout<<"PSNR check, should be inf "<<psnr(original_image, original_image)<<endl;
+  cout<<"PSNR Noisy "<<psnr(original_image, image)<<endl;
 
-  SImg denoised(image.xSize, image.ySize, 0); // Denoised image
-  SImg weights(image.xSize, image.ySize, 0);  // Matrix with accumulated group weights
-
-  int patch_radius(8);    // Patch radius (size=patch_radius*2+1)
-  int window_radius(20);  // Search window (size=window_radius*2+1)
-  float sim_th(100.0);    // Similarity threshold for the first step
-  int maxN(15);           // Maximal number of the patches in one group
+  SImg<float> denoised(image.xSize, image.ySize, 0); // Denoised image
+  SImg<float> weights(image.xSize, image.ySize, 0);  // Matrix with accumulated group weights
   upatches  vec_patches;  // Vector with patch center pixels ((x1,y1), (x2,y2),...)
   // Vector with cumulative sum of patches in each group e.g. (5,8,13)
   // which means fist group has 5 patches, second 3, third 5, etc...
   upatchnum num_patches;    
-
+    
   cout<<"Performing block matching..."<<flush;
-  blockMatching(image, vec_patches, num_patches, patch_radius, window_radius, sim_th, maxN);
+  blockMatching(image, vec_patches, num_patches, p.patch_radius, p.window_radius, p.sim_th, p.maxN);
   cout<<"done"<<endl;
 
   cout<<"Performing BM3D..."<<endl;
-  cout<<vec_patches.size()<<endl;
   for(unsigned i=0;i<num_patches.size();i++){
-    SImg group = gatherPatches(i, vec_patches, num_patches, image, patch_radius);
-    //CImg<unsigned char> test(group.data.data(), group.xSize, group.ySize, group.zSize, 1,1);
-    //test.display();
-    SImg coeff = waveletGroupTransform(group);
-    // th_coeff = thresholdCoeff(coeff, hard_th, group_weight);
-    // rec_group = inverseWaveletGroupTransform(th_coeff);
-    // aggregate(denoised, weights, vec_patches, num_patches, rec_group, group_weight);
+    SImg<float> group = gatherPatches(i, vec_patches, num_patches, image, p.patch_radius);
+    //CImg<float> ggroup(group.data.data(), group.xSize, group.ySize, group.zSize, 1,1); ggroup.display();
+    SImg<float> coeff = waveletGroupTransform(group);
+    //CImg<float> test(coeff.data.data(), coeff.xSize, coeff.ySize, coeff.zSize, 1); test.display();
+    float group_weight(0);
+    thresholdCoeff(coeff, p, group_weight);
+    //cout<<"Group weight "<<group_weight<<endl;
+    //CImg<float> thc(coeff.data.data(), coeff.xSize, coeff.ySize, coeff.zSize, 1); thc.display();
+    SImg<float> rec_group = inverseWaveletGroupTransform(coeff);
+    //CImg<float> testg(rec_group.data.data(), rec_group.xSize, rec_group.ySize, rec_group.zSize, 1,1); testg.display();
+    // assertGroups(group, rec_group);
+    aggregate(i, denoised, weights, vec_patches, num_patches, rec_group, group_weight, p.patch_radius);
   }
   cout<<"done"<<endl;
-  // denoised /= weights;
-  //writePGM("denoised.pgm", denoised);
+  for(int i=0; i<denoised.size; ++i){
+    denoised.data[i] /= weights.data[i];
+  }
+  cout<<"PSNR Denoised "<<psnr(original_image, denoised)<<endl;
+  CImg<float> ddenoised(denoised.data.data(), denoised.xSize, denoised.ySize, denoised.zSize, 1,1);
+  SImg<unsigned char> denoised_out(raw_image.xSize, raw_image.ySize, raw_image.zSize, 0);
+  simgFloatToUnsigned(denoised_out, denoised);
+  writePGM("denoised.pgm", denoised_out);
+  //assertGroups(image, denoised);
+  ddenoised.display();
 
   return EXIT_SUCCESS;
 }
