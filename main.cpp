@@ -31,7 +31,7 @@ CImgDisplay disp1, disp2, disp3, disp4;
 
 struct Parameters{
   string filename = "barbara.pgm";
-  int patch_radius=6;   // Patch radius (size=patch_radius*2)
+  int patch_radius=4;   // Patch radius (size=patch_radius*2)
   int window_radius=20; // Search window (size=window_radius*2+1)
   float sim_th=2500.0;   // Similarity threshold for the first step
   int maxN=16;          // Maximal number of the patches in one group
@@ -192,6 +192,7 @@ void blockMatching(SImg<float> &image,
       udistvec distances(win_size);
 
       // Go through the window
+#pragma omp parallel for
       for (int wy=wyb; wy<=wye; wy+=wins)
         for (int wx=wxb; wx<=wxe; wx+=wins)
         {
@@ -204,35 +205,34 @@ void blockMatching(SImg<float> &image,
       sort(distances.begin(), distances.end(), sort_distances);
 
       for(unsigned i=0; i<distances.size();++i){
-        if (distances[i].first>sim_th || num_patches[curr_i]>=maxN){ cout<<"breaking"<<endl; break; }
+        if (distances[i].first>sim_th || num_patches[curr_i]>=maxN){ break; }
         vec_patches.push_back(distances[i].second);
         num_patches[curr_i]++;
-        cout<<"dist "<<distances[i].first<<endl;
-        cout<<"num_patches "<<num_patches[curr_i]<<endl;
-        cout<<"sim_th "<<sim_th<<endl;
-        cout<<"curr_i "<<curr_i<<endl;
-        cout<<"maxN "<<maxN<<endl;
+        //cout<<"dist "<<distances[i].first<<endl;
+        //cout<<"num_patches "<<num_patches[curr_i]<<endl;
+        //cout<<"sim_th "<<sim_th<<endl;
+        //cout<<"curr_i "<<curr_i<<endl;
+        //cout<<"maxN "<<maxN<<endl;
       }
 
       if( !powerOfTwo(num_patches[curr_i])){
-        cout<<"Changing size of the vec from "<<num_patches[curr_i]<<endl;
+        //cout<<"Changing size of the vec from "<<num_patches[curr_i]<<endl;
         int new_size = closestPowerOfTwo( num_patches[curr_i] );
-        cout<<"to "<<new_size<<endl;
-        cout<<"Total size of vec "<<vec_patches.size()<<endl;
+        //cout<<"to "<<new_size<<endl;
+        //cout<<"Total size of vec "<<vec_patches.size()<<endl;
         int diff = num_patches[curr_i]-new_size;
-        cout<<"Need to remove last "<<diff<<" elements"<<endl;
+        //cout<<"Need to remove last "<<diff<<" elements"<<endl;
         vec_patches.erase(vec_patches.end()-diff, vec_patches.end());
-        cout<<"New size of vec "<<vec_patches.size()<<endl;
+        //cout<<"New size of vec "<<vec_patches.size()<<endl;
         num_patches[curr_i]-=diff;
-        cout<<"New num is "<<num_patches[curr_i]<<endl;
+        //cout<<"New num is "<<num_patches[curr_i]<<endl;
       }
 
-      assert( !(num_patches[curr_i]%2));
       // To make cumulative sum, carry value from the previous step
       if(num_patches.size()>1) { // only if prev step happened
         num_patches[curr_i]+=num_patches[curr_i-1];
       }
-      cout<<"Accumulated patches "<<num_patches[curr_i]<<endl;
+      //cout<<"Accumulated patches "<<num_patches[curr_i]<<endl;
       //cin.get();
 
     } // for j 
@@ -588,7 +588,6 @@ int main(int argc, char *argv[]){
   simgFloatToUnsigned(asb, image);
   writePGM("noisy.pgm", asb);
   CImg<float> noisy(image.data.data(), image.xSize, image.ySize, image.zSize, 1,1); noisy.display(disp1);
-  cout<<"PSNR check, should be inf "<<psnr(original_image, original_image)<<endl;
   cout<<"PSNR Noisy "<<psnr(original_image, image)<<endl;
 
   SImg<float> denoised(image.xSize, image.ySize, 0); // Denoised image
