@@ -22,6 +22,8 @@ using namespace cimg_library;
 #define ISQRT2 0.707106781186547524400844362104849039284835937688474036588f
 
 typedef vector<unsigned char> uimg;
+typedef pair<float, int2> udist;
+typedef vector<udist> udistvec;
 typedef vector<int2> upatches;
 typedef vector<int> upatchnum;
 
@@ -31,8 +33,8 @@ struct Parameters{
   string filename = "barbara.pgm";
   int patch_radius=6;   // Patch radius (size=patch_radius*2)
   int window_radius=20; // Search window (size=window_radius*2+1)
-  float sim_th=500.0;   // Similarity threshold for the first step
-  int maxN=35;          // Maximal number of the patches in one group
+  float sim_th=2500.0;   // Similarity threshold for the first step
+  int maxN=16;          // Maximal number of the patches in one group
   float hard_th=1000.0; // Hard schrinkage threshold
   float sigma=25.0;
   float noise_sigma=25.0;
@@ -143,6 +145,14 @@ float dist(SImg<float> &image,
   return dist/static_cast<float>(patch_radius*patch_radius);
 }
 
+bool sort_distances(udist v1, udist v2) { return v1.first<v2.first; }
+
+inline bool powerOfTwo(const int x){ return !(x == 0) && !(x & (x - 1)); }
+inline int closestPowerOfTwo(const int x){
+ int power = 1;
+ while(power < x) power*=2;
+ return power/2;
+}
 
 void blockMatching(SImg<float> &image, 
                    upatches &vec_patches, 
@@ -154,44 +164,76 @@ void blockMatching(SImg<float> &image,
 {
   int xSize = image.xSize;
   int ySize = image.ySize;
-  int step=3; 
-  
+  int step=1; 
+  unsigned curr_i = 0; 
+
   // Go through the image with step
   for (int j=0; j<image.ySize; j+=step)
     for (int i=0; i<image.xSize; i+=step)
     {
       // Include (reference patch) self
-      vec_patches.push_back( make_int2(i, j) );
-      num_patches.push_back(1);
-      unsigned curr_i = num_patches.size()-1;
+      // vec_patches.push_back( make_int2(i, j) );
+      // num_patches.push_back(1);
+      // init 
+      num_patches.push_back(0);
+      curr_i = num_patches.size()-1;
 
       // Cut boundary of the window if it exceeds image size
       int wxb = max(0, i - window_radius); // window x begin
       int wyb = max(0, j - window_radius); // window y begin
       int wxe = min(xSize-1, i + window_radius); // window x end
       int wye = min(ySize-1, j + window_radius); // window y end 
+      int wins=1;
       
-      // Go through the window
-      for (int wy = wyb; wy <= wye; wy++)
-        for (int wx = wxb; wx <= wxe; wx++)
-        {
-            // Cap max size in group
-            if(num_patches[curr_i]==maxN) continue;
-            // Exclude itself
-            if(i==wx && j==wy) continue;
+      int win_xsize=(wxe-wxb+1);
+      int win_ysize=(wye-wyb+1);
 
-            float distance = dist(image, patch_radius, make_int2(i,j), make_int2(wx,wy));
-            if(distance<sim_th)
-            {
-              vec_patches.push_back( make_int2(wx, wy) );
-              num_patches[curr_i]++;
-            }
+      int win_size=win_xsize*win_ysize;
+      udistvec distances(win_size);
+
+      // Go through the window
+      for (int wy=wyb; wy<=wye; wy+=wins)
+        for (int wx=wxb; wx<=wxe; wx+=wins)
+        {
+
+            distances[idx(wx-wxb,wy-wyb,win_xsize)].first = dist(image, patch_radius, make_int2(i,j), make_int2(wx,wy));
+            distances[idx(wx-wxb,wy-wyb,win_xsize)].second = make_int2(wx,wy);
+            
          }
 
+      sort(distances.begin(), distances.end(), sort_distances);
+
+      for(unsigned i=0; i<distances.size();++i){
+        if (distances[i].first>sim_th || num_patches[curr_i]>=maxN){ cout<<"breaking"<<endl; break; }
+        vec_patches.push_back(distances[i].second);
+        num_patches[curr_i]++;
+        cout<<"dist "<<distances[i].first<<endl;
+        cout<<"num_patches "<<num_patches[curr_i]<<endl;
+        cout<<"sim_th "<<sim_th<<endl;
+        cout<<"curr_i "<<curr_i<<endl;
+        cout<<"maxN "<<maxN<<endl;
+      }
+
+      if( !powerOfTwo(num_patches[curr_i])){
+        cout<<"Changing size of the vec from "<<num_patches[curr_i]<<endl;
+        int new_size = closestPowerOfTwo( num_patches[curr_i] );
+        cout<<"to "<<new_size<<endl;
+        cout<<"Total size of vec "<<vec_patches.size()<<endl;
+        int diff = num_patches[curr_i]-new_size;
+        cout<<"Need to remove last "<<diff<<" elements"<<endl;
+        vec_patches.erase(vec_patches.end()-diff, vec_patches.end());
+        cout<<"New size of vec "<<vec_patches.size()<<endl;
+        num_patches[curr_i]-=diff;
+        cout<<"New num is "<<num_patches[curr_i]<<endl;
+      }
+
+      assert( !(num_patches[curr_i]%2));
       // To make cumulative sum, carry value from the previous step
       if(num_patches.size()>1) { // only if prev step happened
         num_patches[curr_i]+=num_patches[curr_i-1];
       }
+      cout<<"Accumulated patches "<<num_patches[curr_i]<<endl;
+      //cin.get();
 
     } // for j 
   
@@ -519,7 +561,14 @@ void read_parameters(int argc, char *argv[], Parameters &p){
  cout<<"    noise_sigma: "<<fixed<<setprecision(3)<<p.noise_sigma<<endl;
  cout<<"        garotte: "<<fixed<<setprecision(3)<<p.garotte<<endl;
 }
-
+void compareDistances(udistvec v1, udistvec v2){
+  assert(v1.size() == v2.size());
+  for(unsigned k=0; k<v1.size(); ++k){
+    assert(v1[k].first == v2[k].first);
+    assert(v1[k].second.x == v2[k].second.x);
+    assert(v1[k].second.y == v2[k].second.y);
+  }
+}
 int main(int argc, char *argv[]){
   // Take parameters
   Parameters p;
@@ -549,8 +598,10 @@ int main(int argc, char *argv[]){
   // which means fist group has 5 patches, second 3, third 5, etc...
   upatchnum num_patches;    
     
-  cout<<"Performing block matching..."<<flush;
+  cout<<"Performing block matching..."<<endl;
+  clock_t start = clock();
   blockMatching(image, vec_patches, num_patches, p.patch_radius, p.window_radius, p.sim_th, p.maxN);
+  cout<<"Block matching took "<<(clock()-start)/(double) CLOCKS_PER_SEC<<endl;
   cout<<"done"<<endl;
 
   cout<<"Performing BM3D..."<<endl;
