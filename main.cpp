@@ -549,6 +549,136 @@ void compareDistances(udistvec v1, udistvec v2){
     assert(v1[k].second.y == v2[k].second.y);
   }
 }
+
+void dct(SImg<float> &group,
+         const int z)
+{
+  int i;
+  int rows[8][8];
+
+  static const int  c1=1004 /* cos(pi/16) << 10 */,
+        s1=200 /* sin(pi/16) */,
+        c3=851 /* cos(3pi/16) << 10 */,
+        s3=569 /* sin(3pi/16) << 10 */,
+        r2c6=554 /* sqrt(2)*cos(6pi/16) << 10 */,
+        r2s6=1337 /* sqrt(2)*sin(6pi/16) << 10 */,
+        r2=181; /* sqrt(2) << 7*/
+
+  int x0,x1,x2,x3,x4,x5,x6,x7,x8;
+
+  /* transform rows */
+  for (i=0; i<8; i++)
+  {
+    x0 = group(0, i, z);
+    x1 = group(1, i, z);
+    x2 = group(2, i, z);
+    x3 = group(3, i, z);
+    x4 = group(4, i, z);
+    x5 = group(5, i, z);
+    x6 = group(6, i, z);
+    x7 = group(7, i, z);
+
+    /* Stage 1 */
+    x8=x7+x0;
+    x0-=x7;
+    x7=x1+x6;
+    x1-=x6;
+    x6=x2+x5;
+    x2-=x5;
+    x5=x3+x4;
+    x3-=x4;
+
+    /* Stage 2 */
+    x4=x8+x5;
+    x8-=x5;
+    x5=x7+x6;
+    x7-=x6;
+    x6=c1*(x1+x2);
+    x2=(-s1-c1)*x2+x6;
+    x1=(s1-c1)*x1+x6;
+    x6=c3*(x0+x3);
+    x3=(-s3-c3)*x3+x6;
+    x0=(s3-c3)*x0+x6;
+
+    /* Stage 3 */
+    x6=x4+x5;
+    x4-=x5;
+    x5=r2c6*(x7+x8);
+    x7=(-r2s6-r2c6)*x7+x5;
+    x8=(r2s6-r2c6)*x8+x5;
+    x5=x0+x2;
+    x0-=x2;
+    x2=x3+x1;
+    x3-=x1;
+
+    /* Stage 4 and output */
+    rows[i][0]=x6;
+    rows[i][4]=x4;
+    rows[i][2]=x8>>10;
+    rows[i][6]=x7>>10;
+    rows[i][7]=(x2-x5)>>10;
+    rows[i][1]=(x2+x5)>>10;
+    rows[i][3]=(x3*r2)>>17;
+    rows[i][5]=(x0*r2)>>17;
+  }
+
+  /* transform columns */
+  for (i=0; i<8; i++)
+  {
+    x0 = rows[0][i];
+    x1 = rows[1][i];
+    x2 = rows[2][i];
+    x3 = rows[3][i];
+    x4 = rows[4][i];
+    x5 = rows[5][i];
+    x6 = rows[6][i];
+    x7 = rows[7][i];
+
+    /* Stage 1 */
+    x8=x7+x0;
+    x0-=x7;
+    x7=x1+x6;
+    x1-=x6;
+    x6=x2+x5;
+    x2-=x5;
+    x5=x3+x4;
+    x3-=x4;
+
+    /* Stage 2 */
+    x4=x8+x5;
+    x8-=x5;
+    x5=x7+x6;
+    x7-=x6;
+    x6=c1*(x1+x2);
+    x2=(-s1-c1)*x2+x6;
+    x1=(s1-c1)*x1+x6;
+    x6=c3*(x0+x3);
+    x3=(-s3-c3)*x3+x6;
+    x0=(s3-c3)*x0+x6;
+
+    /* Stage 3 */
+    x6=x4+x5;
+    x4-=x5;
+    x5=r2c6*(x7+x8);
+    x7=(-r2s6-r2c6)*x7+x5;
+    x8=(r2s6-r2c6)*x8+x5;
+    x5=x0+x2;
+    x0-=x2;
+    x2=x3+x1;
+    x3-=x1;
+
+    /* Stage 4 and output */
+    group(0,i,z)=(float)((x6+16)>>3);
+    group(4,i,z)=(float)((x4+16)>>3);
+    group(2,i,z)=(float)((x8+16384)>>13);
+    group(6,i,z)=(float)((x7+16384)>>13);
+    group(7,i,z)=(float)((x2-x5+16384)>>13);
+    group(1,i,z)=(float)((x2+x5+16384)>>13);
+    group(3,i,z)=(float)(((x3>>8)*r2+8192)>>12);
+    group(5,i,z)=(float)(((x0>>8)*r2+8192)>>12);
+  }
+}
+
 int main(int argc, char *argv[]){
   // Take parameters
   Parameters p;
@@ -586,7 +716,11 @@ int main(int argc, char *argv[]){
   cout<<"Performing BM3D..."<<endl;
   for(unsigned i=0;i<num_patches.size();i++){
     SImg<float> group = gatherPatches(i, vec_patches, num_patches, image, p.patch_radius);
-    //CImg<float> ggroup(group.data.data(), group.xSize, group.ySize, group.zSize, 1,1); ggroup.display();
+    CImg<float> ggroup(group.data.data(), group.xSize, group.ySize, group.zSize, 1,1); ggroup.display();
+    for(int i_d=0; i_d<group.zSize; ++i_d){
+      dct(group, i_d);
+    }
+    CImg<float> idct(group.data.data(), group.xSize, group.ySize, group.zSize, 1); idct.display();
     SImg<float> coeff = waveletGroupTransform(group);
     //CImg<float> test(coeff.data.data(), coeff.xSize, coeff.ySize, coeff.zSize, 1); test.display();
     float group_weight(0);
