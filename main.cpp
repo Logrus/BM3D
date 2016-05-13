@@ -37,7 +37,7 @@ struct Parameters{
   int window_radius=20; // Search window (size=window_radius*2+1)
   float sim_th=2500.0;   // Similarity threshold for the first step
   int maxN=16;          // Maximal number of the patches in one group
-  float hard_th=200.0; // Hard schrinkage threshold
+  float hard_th=2.7; // Hard schrinkage threshold
   float sigma=25.0;
   float noise_sigma=25.0;
   float garotte=false;
@@ -186,7 +186,7 @@ void blockMatching(SImg<float> &image,
 {
   int xSize = image.xSize;
   int ySize = image.ySize;
-  int step=4;
+  int step=3;
   unsigned curr_i = 0;
 
   // Go through the image with step
@@ -606,7 +606,80 @@ void IDCT2DGroup(SImg<float> &src, SImg<float> &dst){
 
   }
 }
+// (a,b) -> (a+b,a-b) without overflow
+void whrotate( float& a, float& b )
+{
+    static float t;
+    t = a;
+    a = a + b;
+    b = t - b;
+}
 
+// Integer log2
+long ilog2( long x )
+{
+    long l2 = 0;
+    for (; x; x >>=1) ++l2;
+    return l2;
+}
+
+/**
+ * Fast Walsh-Hadamard transform
+ */
+void fwht( vector<float> &data )
+{
+    const long l2 = ilog2(data.size()) - 1;
+
+    for (long i = 0; i < l2; ++i)
+    {
+        for (long j = 0; j < (1 << l2); j += 1 << (i+1))
+        for (long k = 0; k < (1 << i ); ++k)
+            whrotate( data[j + k], data[j + k + (1<<i)] );
+    }
+}
+inline bool is_pow2( int n )
+{
+  return (n > 1) && ((n & (n-1)) == 0);
+}
+
+void forwardWH(SImg<float> &group, Parameters p, float &group_weight){
+  vector<float> data(group.zSize);
+  int counter(0);
+  float threshold = p.hard_th * sqrtf((float)group.zSize); // * p.sigma
+
+  for(int y=0;y<group.ySize;++y)
+  for(int x=0;x<group.xSize;++x){
+
+    // gather vec
+    for (int z=0;z<group.zSize;++z) data[z]=group(x,y,z);
+    fwht(data);
+    //normalize
+    for (unsigned z=0;z<data.size();++z) data[z] /= data.size();
+
+    // Hard thresholding
+    for (int z=0;z<group.zSize;++z){
+      if (fabs(data[z])>threshold) counter++;
+      else data[z] = 0;
+    }
+
+    //write it back
+    for (int z=0;z<group.zSize;++z) group(x,y,z)=data[z];
+
+  }
+  group_weight=1./(float)counter;
+}
+void inverseWH(SImg<float> &group){
+  vector<float> data(group.zSize);
+
+  for(int y=0;y<group.ySize;++y)
+  for(int x=0;x<group.xSize;++x){
+    // gather vec
+    for (int z=0;z<group.zSize;++z) data[z]=group(x,y,z);
+    fwht(data);
+    //write it back
+    for (int z=0;z<group.zSize;++z) group(x,y,z)=data[z];
+  }
+}
 
 int main(int argc, char *argv[]){
   // Take parameters
@@ -645,23 +718,22 @@ int main(int argc, char *argv[]){
   cout<<"Performing BM3D..."<<endl;
   for(unsigned i=0;i<num_patches.size();i++){
     SImg<float> group = gatherPatches(i, vec_patches, num_patches, image, p.patch_radius);
-
     //CImg<float> ggroup(group.data.data(), group.xSize, group.ySize, group.zSize, 1,1); ggroup.display();
 
     SImg<float> tgroup(group.xSize, group.ySize, group.zSize, 0);
     SImg<float> rgroup(group.xSize, group.ySize, group.zSize, 0);
 
     DCT2DGroup(group, tgroup);
-    //CImg<float> a1(tgroup.data.data(), tgroup.xSize, tgroup.ySize, tgroup.zSize, 1, 1); a1.display();
 
+    //CImg<float> a1(tgroup.data.data(), tgroup.xSize, tgroup.ySize, tgroup.zSize, 1, 1); a1.display();
+    float group_weight(0);
+    forwardWH(tgroup, p, group_weight);
+    inverseWH(tgroup);
     IDCT2DGroup(tgroup,rgroup);
     //CImg<float> a2(rgroup.data.data(), rgroup.xSize, rgroup.ySize, rgroup.zSize, 1,1); a2.display();
-
-
-
+    // Wavelet transform
     //SImg<float> coeff = waveletGroupTransform(group);
     //CImg<float> test(coeff.data.data(), coeff.xSize, coeff.ySize, coeff.zSize, 1); test.display();
-    float group_weight(1);
     //thresholdCoeff(coeff, p, group_weight);
     //cout<<"Group weight "<<group_weight<<endl;
     //CImg<float> thc(coeff.data.data(), coeff.xSize, coeff.ySize, coeff.zSize, 1); thc.display();
@@ -669,6 +741,11 @@ int main(int argc, char *argv[]){
     //CImg<float> testg(rec_group.data.data(), rec_group.xSize, rec_group.ySize, rec_group.zSize, 1,1); testg.display();
     // assertGroups(group, rec_group);
     aggregate(i, denoised, weights, vec_patches, num_patches, rgroup, group_weight, p.patch_radius);
+    SImg<float> tmp(denoised.xSize, denoised.ySize, denoised.zSize, 0);
+    for(int i=0; i<denoised.size; ++i) tmp.data[i] = denoised.data[i] / weights.data[i];
+    CImg<float> testg(tmp.data.data(), tmp.xSize, tmp.ySize, tmp.zSize, 1,1); testg.display(disp2);
+
+
   }
   cout<<"done"<<endl;
   for(int i=0; i<denoised.size; ++i){
