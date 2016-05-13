@@ -35,7 +35,7 @@ struct Parameters{
   int window_radius=20; // Search window (size=window_radius*2+1)
   float sim_th=2500.0;   // Similarity threshold for the first step
   int maxN=16;          // Maximal number of the patches in one group
-  float hard_th=1000.0; // Hard schrinkage threshold
+  float hard_th=200.0; // Hard schrinkage threshold
   float sigma=25.0;
   float noise_sigma=25.0;
   float garotte=false;
@@ -48,12 +48,12 @@ class SImg{
 public:
   inline SImg(): xSize(0), ySize(0), zSize(0), maxVal(0) {  }
   inline SImg(int width, int height, int depth, T initialValue): xSize(width), ySize(height), zSize(depth), maxVal(255) {
-  size=xSize*ySize*zSize; 
+  size=xSize*ySize*zSize;
   data.resize(size);
   std::fill(data.begin(), data.end(), initialValue);
   };
   inline SImg(int width, int height, T initialValue): xSize(width), ySize(height), zSize(1), maxVal(255) {
-  size=xSize*ySize*zSize; 
+  size=xSize*ySize*zSize;
   data.resize(size);
   std::fill(data.begin(), data.end(), initialValue);
   };
@@ -99,7 +99,7 @@ public:
   int maxVal;
 };
 
-bool readPGM(const string &filename, 
+bool readPGM(const string &filename,
              SImg<unsigned char> &image)
 {
   ifstream File(filename.c_str(), ifstream::binary);
@@ -110,11 +110,11 @@ bool readPGM(const string &filename,
   File >> dummy >> image.xSize >> image.ySize >> image.maxVal;
   File.get(); // Remove all excessive spaces
   image.init(); // (Re)Initialize image from sizes
-  File.read(reinterpret_cast<char*>(image.data.data()), length); 
+  File.read(reinterpret_cast<char*>(image.data.data()), length);
   return true;
 }
 
-bool writePGM(const string &filename, 
+bool writePGM(const string &filename,
               const SImg<unsigned char> &image)
 {
   std::ofstream File(filename.c_str());
@@ -129,8 +129,8 @@ bool comp2float(const float &v1, const float &v2){
 
 }
 
-float dist(SImg<float> &image, 
-           int patch_radius, 
+float dist(SImg<float> &image,
+           int patch_radius,
            int2 p1, // Reference patch
            int2 p2)
 {
@@ -154,27 +154,25 @@ inline int closestPowerOfTwo(const int x){
  return power/2;
 }
 
-void blockMatching(SImg<float> &image, 
-                   upatches &vec_patches, 
-                   upatchnum &num_patches, 
+void blockMatching(SImg<float> &image,
+                   upatches &vec_patches,
+                   upatchnum &num_patches,
                    int patch_radius,
-                   int window_radius, 
-                   float sim_th, 
+                   int window_radius,
+                   float sim_th,
                    int maxN)
 {
   int xSize = image.xSize;
   int ySize = image.ySize;
-  int step=1; 
-  unsigned curr_i = 0; 
+  int step=1;
+  unsigned curr_i = 0;
 
   // Go through the image with step
   for (int j=0; j<image.ySize; j+=step)
     for (int i=0; i<image.xSize; i+=step)
     {
       // Include (reference patch) self
-      // vec_patches.push_back( make_int2(i, j) );
-      // num_patches.push_back(1);
-      // init 
+      // init
       num_patches.push_back(0);
       curr_i = num_patches.size()-1;
 
@@ -182,9 +180,9 @@ void blockMatching(SImg<float> &image,
       int wxb = max(0, i - window_radius); // window x begin
       int wyb = max(0, j - window_radius); // window y begin
       int wxe = min(xSize-1, i + window_radius); // window x end
-      int wye = min(ySize-1, j + window_radius); // window y end 
+      int wye = min(ySize-1, j + window_radius); // window y end
       int wins=1;
-      
+
       int win_xsize=(wxe-wxb+1);
       int win_ysize=(wye-wyb+1);
 
@@ -199,7 +197,7 @@ void blockMatching(SImg<float> &image,
 
             distances[idx(wx-wxb,wy-wyb,win_xsize)].first = dist(image, patch_radius, make_int2(i,j), make_int2(wx,wy));
             distances[idx(wx-wxb,wy-wyb,win_xsize)].second = make_int2(wx,wy);
-            
+
          }
 
       sort(distances.begin(), distances.end(), sort_distances);
@@ -208,35 +206,22 @@ void blockMatching(SImg<float> &image,
         if (distances[i].first>sim_th || num_patches[curr_i]>=maxN){ break; }
         vec_patches.push_back(distances[i].second);
         num_patches[curr_i]++;
-        //cout<<"dist "<<distances[i].first<<endl;
-        //cout<<"num_patches "<<num_patches[curr_i]<<endl;
-        //cout<<"sim_th "<<sim_th<<endl;
-        //cout<<"curr_i "<<curr_i<<endl;
-        //cout<<"maxN "<<maxN<<endl;
       }
 
       if( !powerOfTwo(num_patches[curr_i])){
-        //cout<<"Changing size of the vec from "<<num_patches[curr_i]<<endl;
         int new_size = closestPowerOfTwo( num_patches[curr_i] );
-        //cout<<"to "<<new_size<<endl;
-        //cout<<"Total size of vec "<<vec_patches.size()<<endl;
         int diff = num_patches[curr_i]-new_size;
-        //cout<<"Need to remove last "<<diff<<" elements"<<endl;
         vec_patches.erase(vec_patches.end()-diff, vec_patches.end());
-        //cout<<"New size of vec "<<vec_patches.size()<<endl;
         num_patches[curr_i]-=diff;
-        //cout<<"New num is "<<num_patches[curr_i]<<endl;
       }
 
       // To make cumulative sum, carry value from the previous step
       if(num_patches.size()>1) { // only if prev step happened
         num_patches[curr_i]+=num_patches[curr_i-1];
       }
-      //cout<<"Accumulated patches "<<num_patches[curr_i]<<endl;
-      //cin.get();
 
-    } // for j 
-  
+    } // for j
+
 }
 
 void wavelet2DTransform( SImg<float> &coeff, const SImg<float> &image){
@@ -283,7 +268,7 @@ void waveletI2DTransform( SImg<float> &image, SImg<float> &coeff){
        DD(x,y)=DDv;
      }
    for (int y = 0; y < CK.ySize; y++)
-     for (int x = 0; x < CK.xSize; x++) 
+     for (int x = 0; x < CK.xSize; x++)
      {
         image(2*x,2*y)    =ISQRT2*(CK(x,y)+DH(x,y)+DV(x,y)+DD(x,y));
         image(2*x+1,2*y)  =ISQRT2*(CK(x,y)-DH(x,y)+DV(x,y)-DD(x,y));
@@ -333,8 +318,6 @@ void wavelet1DTransform(SImg<float> &coeff, SImg<float> &image, int dim){
             coeff(x,y,z)=CK(x,y,z);
           }
      }
-   //CImg<unsigned char> sDK(DK.data.data(), DK.xSize, DK.ySize,1,1,1);
-   //sDK.display();
 }
 void waveletI1DTransform(SImg<float> &image, SImg<float> &coeff, int dim){
   int dimxsize = coeff.xSize;
@@ -378,16 +361,16 @@ inline void drawGroup(SImg<float> &image, upatches &patches, upatchnum &npatches
     CImg<float> img(img_copy.data(),image.xSize,image.ySize,1,1,1);
     const unsigned char c_mat[] = {255, 0, 0};
     for(int i=start; i<Np;++i){
-        pair<int2,int2> ref = getPatchBeginEnd(patches[i], k, xSize, ySize); 
+        pair<int2,int2> ref = getPatchBeginEnd(patches[i], k, xSize, ySize);
         img.draw_rectangle(ref.first.x,ref.first.y,ref.second.x,ref.second.y,c_mat, 0.5);
     }
     img.display(disp1);
 }
 
-SImg<float> gatherPatches(int idx, 
-                   upatches &vec_patches, 
-                   upatchnum &num_patches, 
-                   SImg<float> &image, 
+SImg<float> gatherPatches(int idx,
+                   upatches &vec_patches,
+                   upatchnum &num_patches,
+                   SImg<float> &image,
                    int patch_radius){
   int N(0);
   if(idx==0) N=num_patches[idx];
@@ -399,9 +382,6 @@ SImg<float> gatherPatches(int idx,
   SImg<float> gathered_patches(patch_size, patch_size, N+append, 0);
 
   int start=num_patches[idx]-N;
-  //int end   = num_patches[idx];
-  //cout << "Start patch "<<start<<" end patch "<<end<<" number real "<<N<<" rounded "<<N+append<<endl;
-
   for(int z=0;z<gathered_patches.zSize;++z)
   {
     int2 cp = vec_patches[start+z];
@@ -485,7 +465,7 @@ void thresholdCoeff( SImg<float> &coeff, Parameters &p, float &group_weight){
         if( fabs(val)<p.hard_th ){
           // Hard thresholding
           coeff(x,y,z) = 0;
-        } else { 
+        } else {
           if(p.garotte)
             coeff(x,y,z) = val-((p.hard_th*p.hard_th)/val);
           count++;
@@ -517,7 +497,7 @@ void add_noise(SImg<float> &dst, SImg<float> &src, const float sigma){
   default_random_engine generator;
   normal_distribution<double> dist(0, sigma);
   for(unsigned i=0; i<dst.data.size(); ++i){
-    dst.data[i] = src.data[i] + dist(generator); 
+    dst.data[i] = src.data[i] + dist(generator);
   }
 }
 float psnr( SImg<float>& gt, SImg<float>& noisy )
@@ -538,7 +518,7 @@ void read_parameters(int argc, char *argv[], Parameters &p){
  if (argc==1){
    cout<<argv[0]<<" image patch_radius window_radius sim_th maxN hard_th sigma"<<endl;
    cout<<"performing with the default settings"<<endl;
- } 
+ }
 
  if(argc>=2) p.filename=argv[1];
  if(argc>=3) p.patch_radius=atoi(argv[2]);
@@ -573,8 +553,8 @@ int main(int argc, char *argv[]){
   // Take parameters
   Parameters p;
   read_parameters(argc, argv, p);
-  
-  SImg<unsigned char> raw_image; // Original image 
+
+  SImg<unsigned char> raw_image; // Original image
   cout<<"Reading image..."<<flush;
   if(! readPGM(p.filename.c_str(), raw_image) ){ cerr << "Failed to open the image.\n"; return EXIT_FAILURE;}
   cout<<"done"<<endl;
@@ -595,8 +575,8 @@ int main(int argc, char *argv[]){
   upatches  vec_patches;  // Vector with patch center pixels ((x1,y1), (x2,y2),...)
   // Vector with cumulative sum of patches in each group e.g. (5,8,13)
   // which means fist group has 5 patches, second 3, third 5, etc...
-  upatchnum num_patches;    
-    
+  upatchnum num_patches;
+
   cout<<"Performing block matching..."<<endl;
   clock_t start = clock();
   blockMatching(image, vec_patches, num_patches, p.patch_radius, p.window_radius, p.sim_th, p.maxN);
@@ -617,11 +597,6 @@ int main(int argc, char *argv[]){
     //CImg<float> testg(rec_group.data.data(), rec_group.xSize, rec_group.ySize, rec_group.zSize, 1,1); testg.display();
     // assertGroups(group, rec_group);
     aggregate(i, denoised, weights, vec_patches, num_patches, rec_group, group_weight, p.patch_radius);
-    SImg<float> tmp(denoised.xSize, denoised.ySize, denoised.zSize, 0);
-    for(int i=0; i<denoised.size; ++i){
-      tmp.data[i] = denoised.data[i] / weights.data[i];
-    }
-    CImg<float> ttmp(tmp.data.data(), denoised.xSize, denoised.ySize, denoised.zSize, 1,1); ttmp.display(disp3);
   }
   cout<<"done"<<endl;
   for(int i=0; i<denoised.size; ++i){
