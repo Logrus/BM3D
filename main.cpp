@@ -13,6 +13,8 @@
 #include <omp.h>
 #include <random>
 #include <limits>
+#include <math.h>
+#include <opencv2/opencv.hpp>
 using namespace std;
 using namespace cimg_library;
 
@@ -61,6 +63,14 @@ public:
     data = in_img.data;
     size = xSize*ySize*zSize;
   };
+  inline SImg(const SImg<T> &in){
+    data = in.data;
+    xSize = in.xSize;
+    ySize = in.ySize;
+    zSize = in.zSize;
+    size = in.size;
+    maxVal = in.maxVal;
+  }
   inline T& operator()(const int ax, const int ay, const int az)  {
     int cx = CLIP(0, ax, xSize);
     int cy = CLIP(0, ay, ySize);
@@ -80,6 +90,18 @@ public:
     size = xSize*ySize*zSize;
     data.resize(size);
   };
+  template<typename M>
+  void initFromSImg( SImg<M> &in ){
+    data = vector<T>(in.data.begin(), in.data.end());
+    xSize = in.xSize;
+    ySize = in.ySize;
+    zSize = in.zSize;
+    size = in.size;
+    maxVal = in.maxVal;
+  }
+  void selfRound(){
+    for(int i=0; i<data.size();++i) {data[i] = round(data[i]); }
+  }
   void normalize(T n_min, T n_max){
     T c_min(numeric_limits<T>::max()), c_max(numeric_limits<T>::min());
     for(int i=0;i<data.size();++i){
@@ -164,7 +186,7 @@ void blockMatching(SImg<float> &image,
 {
   int xSize = image.xSize;
   int ySize = image.ySize;
-  int step=1;
+  int step=4;
   unsigned curr_i = 0;
 
   // Go through the image with step
@@ -550,134 +572,41 @@ void compareDistances(udistvec v1, udistvec v2){
   }
 }
 
-void dct(SImg<float> &group,
-         const int z)
-{
-  int i;
-  int rows[8][8];
+void DCT2DGroup(SImg<float> &src, SImg<float> &dst){
+  cv::Mat img(src.xSize,src.ySize,CV_32F), cvtranf;
+  for(int z=0; z<src.zSize; ++z){
 
-  static const int  c1=1004 /* cos(pi/16) << 10 */,
-        s1=200 /* sin(pi/16) */,
-        c3=851 /* cos(3pi/16) << 10 */,
-        s3=569 /* sin(3pi/16) << 10 */,
-        r2c6=554 /* sqrt(2)*cos(6pi/16) << 10 */,
-        r2s6=1337 /* sqrt(2)*sin(6pi/16) << 10 */,
-        r2=181; /* sqrt(2) << 7*/
+    for(int l=0;l<src.ySize;++l)
+    for(int d=0;d<src.xSize;++d)
+        img.at<float>(d,l) = src(d,l,z);
 
-  int x0,x1,x2,x3,x4,x5,x6,x7,x8;
+    cv::dct(img, cvtranf);
 
-  /* transform rows */
-  for (i=0; i<8; i++)
-  {
-    x0 = group(0, i, z);
-    x1 = group(1, i, z);
-    x2 = group(2, i, z);
-    x3 = group(3, i, z);
-    x4 = group(4, i, z);
-    x5 = group(5, i, z);
-    x6 = group(6, i, z);
-    x7 = group(7, i, z);
+    for(int l=0;l<src.ySize;++l)
+    for(int d=0;d<src.xSize;++d)
+        dst(d,l,z) = cvtranf.at<float>(d,l);
 
-    /* Stage 1 */
-    x8=x7+x0;
-    x0-=x7;
-    x7=x1+x6;
-    x1-=x6;
-    x6=x2+x5;
-    x2-=x5;
-    x5=x3+x4;
-    x3-=x4;
-
-    /* Stage 2 */
-    x4=x8+x5;
-    x8-=x5;
-    x5=x7+x6;
-    x7-=x6;
-    x6=c1*(x1+x2);
-    x2=(-s1-c1)*x2+x6;
-    x1=(s1-c1)*x1+x6;
-    x6=c3*(x0+x3);
-    x3=(-s3-c3)*x3+x6;
-    x0=(s3-c3)*x0+x6;
-
-    /* Stage 3 */
-    x6=x4+x5;
-    x4-=x5;
-    x5=r2c6*(x7+x8);
-    x7=(-r2s6-r2c6)*x7+x5;
-    x8=(r2s6-r2c6)*x8+x5;
-    x5=x0+x2;
-    x0-=x2;
-    x2=x3+x1;
-    x3-=x1;
-
-    /* Stage 4 and output */
-    rows[i][0]=x6;
-    rows[i][4]=x4;
-    rows[i][2]=x8>>10;
-    rows[i][6]=x7>>10;
-    rows[i][7]=(x2-x5)>>10;
-    rows[i][1]=(x2+x5)>>10;
-    rows[i][3]=(x3*r2)>>17;
-    rows[i][5]=(x0*r2)>>17;
   }
 
-  /* transform columns */
-  for (i=0; i<8; i++)
-  {
-    x0 = rows[0][i];
-    x1 = rows[1][i];
-    x2 = rows[2][i];
-    x3 = rows[3][i];
-    x4 = rows[4][i];
-    x5 = rows[5][i];
-    x6 = rows[6][i];
-    x7 = rows[7][i];
+}
 
-    /* Stage 1 */
-    x8=x7+x0;
-    x0-=x7;
-    x7=x1+x6;
-    x1-=x6;
-    x6=x2+x5;
-    x2-=x5;
-    x5=x3+x4;
-    x3-=x4;
+void IDCT2DGroup(SImg<float> &src, SImg<float> &dst){
+  cv::Mat img(src.xSize,src.ySize,CV_32F), rec;
+  for(int z=0; z<src.zSize; ++z){
 
-    /* Stage 2 */
-    x4=x8+x5;
-    x8-=x5;
-    x5=x7+x6;
-    x7-=x6;
-    x6=c1*(x1+x2);
-    x2=(-s1-c1)*x2+x6;
-    x1=(s1-c1)*x1+x6;
-    x6=c3*(x0+x3);
-    x3=(-s3-c3)*x3+x6;
-    x0=(s3-c3)*x0+x6;
+    for(int l=0;l<src.ySize;++l)
+    for(int d=0;d<src.xSize;++d)
+        img.at<float>(d,l) = src(d,l,z);
 
-    /* Stage 3 */
-    x6=x4+x5;
-    x4-=x5;
-    x5=r2c6*(x7+x8);
-    x7=(-r2s6-r2c6)*x7+x5;
-    x8=(r2s6-r2c6)*x8+x5;
-    x5=x0+x2;
-    x0-=x2;
-    x2=x3+x1;
-    x3-=x1;
+    cv::dct(img, rec, cv::DCT_INVERSE);
 
-    /* Stage 4 and output */
-    group(0,i,z)=(float)((x6+16)>>3);
-    group(4,i,z)=(float)((x4+16)>>3);
-    group(2,i,z)=(float)((x8+16384)>>13);
-    group(6,i,z)=(float)((x7+16384)>>13);
-    group(7,i,z)=(float)((x2-x5+16384)>>13);
-    group(1,i,z)=(float)((x2+x5+16384)>>13);
-    group(3,i,z)=(float)(((x3>>8)*r2+8192)>>12);
-    group(5,i,z)=(float)(((x0>>8)*r2+8192)>>12);
+    for(int l=0;l<src.ySize;++l)
+    for(int d=0;d<src.xSize;++d)
+        dst(d,l,z) = rec.at<float>(d,l);
+
   }
 }
+
 
 int main(int argc, char *argv[]){
   // Take parameters
@@ -716,21 +645,30 @@ int main(int argc, char *argv[]){
   cout<<"Performing BM3D..."<<endl;
   for(unsigned i=0;i<num_patches.size();i++){
     SImg<float> group = gatherPatches(i, vec_patches, num_patches, image, p.patch_radius);
-    CImg<float> ggroup(group.data.data(), group.xSize, group.ySize, group.zSize, 1,1); ggroup.display();
-    for(int i_d=0; i_d<group.zSize; ++i_d){
-      dct(group, i_d);
-    }
-    CImg<float> idct(group.data.data(), group.xSize, group.ySize, group.zSize, 1); idct.display();
-    SImg<float> coeff = waveletGroupTransform(group);
+
+    //CImg<float> ggroup(group.data.data(), group.xSize, group.ySize, group.zSize, 1,1); ggroup.display();
+
+    SImg<float> tgroup(group.xSize, group.ySize, group.zSize, 0);
+    SImg<float> rgroup(group.xSize, group.ySize, group.zSize, 0);
+
+    DCT2DGroup(group, tgroup);
+    //CImg<float> a1(tgroup.data.data(), tgroup.xSize, tgroup.ySize, tgroup.zSize, 1, 1); a1.display();
+
+    IDCT2DGroup(tgroup,rgroup);
+    //CImg<float> a2(rgroup.data.data(), rgroup.xSize, rgroup.ySize, rgroup.zSize, 1,1); a2.display();
+
+
+
+    //SImg<float> coeff = waveletGroupTransform(group);
     //CImg<float> test(coeff.data.data(), coeff.xSize, coeff.ySize, coeff.zSize, 1); test.display();
-    float group_weight(0);
-    thresholdCoeff(coeff, p, group_weight);
+    float group_weight(1);
+    //thresholdCoeff(coeff, p, group_weight);
     //cout<<"Group weight "<<group_weight<<endl;
     //CImg<float> thc(coeff.data.data(), coeff.xSize, coeff.ySize, coeff.zSize, 1); thc.display();
-    SImg<float> rec_group = inverseWaveletGroupTransform(coeff);
+    //SImg<float> rec_group = inverseWaveletGroupTransform(coeff);
     //CImg<float> testg(rec_group.data.data(), rec_group.xSize, rec_group.ySize, rec_group.zSize, 1,1); testg.display();
     // assertGroups(group, rec_group);
-    aggregate(i, denoised, weights, vec_patches, num_patches, rec_group, group_weight, p.patch_radius);
+    aggregate(i, denoised, weights, vec_patches, num_patches, rgroup, group_weight, p.patch_radius);
   }
   cout<<"done"<<endl;
   for(int i=0; i<denoised.size; ++i){
