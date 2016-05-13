@@ -617,6 +617,11 @@ int main(int argc, char *argv[]){
     //CImg<float> testg(rec_group.data.data(), rec_group.xSize, rec_group.ySize, rec_group.zSize, 1,1); testg.display();
     // assertGroups(group, rec_group);
     aggregate(i, denoised, weights, vec_patches, num_patches, rec_group, group_weight, p.patch_radius);
+    SImg<float> tmp(denoised.xSize, denoised.ySize, denoised.zSize, 0);
+    for(int i=0; i<denoised.size; ++i){
+      tmp.data[i] = denoised.data[i] / weights.data[i];
+    }
+    CImg<float> ttmp(tmp.data.data(), denoised.xSize, denoised.ySize, denoised.zSize, 1,1); ttmp.display(disp3);
   }
   cout<<"done"<<endl;
   for(int i=0; i<denoised.size; ++i){
