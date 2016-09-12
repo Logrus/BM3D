@@ -38,8 +38,8 @@ struct Parameters{
   float sim_th=2500.0;  // Similarity threshold for the first step
   int maxN=16;          // Maximal number of the patches in one group
   float hard_th=2.7;    // Hard schrinkage threshold
-  float sigma=25.0;
-  float noise_sigma=25.0;
+  float sigma=15.0;
+  float noise_sigma=15.0;
   float garotte=false;
   bool add_noise_ = false;
 };
