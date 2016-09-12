@@ -35,9 +35,9 @@ struct Parameters{
   string filename = "barbara.pgm";
   int patch_radius=4;   // Patch radius (size=patch_radius*2)
   int window_radius=20; // Search window (size=window_radius*2+1)
-  float sim_th=2500.0;   // Similarity threshold for the first step
+  float sim_th=2500.0;  // Similarity threshold for the first step
   int maxN=16;          // Maximal number of the patches in one group
-  float hard_th=2.7; // Hard schrinkage threshold
+  float hard_th=2.7;    // Hard schrinkage threshold
   float sigma=25.0;
   float noise_sigma=25.0;
   float garotte=false;
@@ -248,7 +248,7 @@ void blockMatching(SImg<float> &image,
 
 void wavelet2DTransform( SImg<float> &coeff, const SImg<float> &image){
    SImg<float> C(image, image.xSize, image.ySize);
-   int xsize=image.xSize;
+   // int xsize  =image.xSize; // unused
    int hxsize=image.xSize/2;
    int hysize=image.ySize/2;
    SImg<float> CK(hxsize, hysize, 0);
@@ -257,10 +257,10 @@ void wavelet2DTransform( SImg<float> &coeff, const SImg<float> &image){
    SImg<float> DD(hxsize, hysize, 0);
    for(int y=0; y<hysize; y++)
      for(int x=0; x<hxsize; x++) {
-       CK.data[idx(x,y,hxsize)]=0.5*(C.data[idx(2*x,2*y,xsize)]+C.data[idx(2*x+1,2*y,xsize)]+C.data[idx(2*x,2*y+1,xsize)]+C.data[idx(2*x+1,2*y+1,xsize)]);
-       DH.data[idx(x,y,hxsize)]=0.5*(C.data[idx(2*x,2*y,xsize)]+C.data[idx(2*x,2*y+1,xsize)]-C.data[idx(2*x+1,2*y,xsize)]-C.data[idx(2*x+1,2*y+1,xsize)]);
-       DV.data[idx(x,y,hxsize)]=0.5*(C.data[idx(2*x,2*y,xsize)]+C.data[idx(2*x+1,2*y,xsize)]-C.data[idx(2*x,2*y+1,xsize)]-C.data[idx(2*x+1,2*y+1,xsize)]);
-       DD.data[idx(x,y,hxsize)]=0.5*(C.data[idx(2*x,2*y,xsize)]-C.data[idx(2*x+1,2*y,xsize)]-C.data[idx(2*x,2*y+1,xsize)]+C.data[idx(2*x+1,2*y+1,xsize)]);
+       CK(x,y)=0.5*(C(2*x,2*y)+C(2*x+1,2*y)+C(2*x,2*y+1)+C(2*x+1,2*y+1));
+       DH(x,y)=0.5*(C(2*x,2*y)+C(2*x,2*y+1)-C(2*x+1,2*y)-C(2*x+1,2*y+1));
+       DV(x,y)=0.5*(C(2*x,2*y)+C(2*x+1,2*y)-C(2*x,2*y+1)-C(2*x+1,2*y+1));
+       DD(x,y)=0.5*(C(2*x,2*y)-C(2*x+1,2*y)-C(2*x,2*y+1)+C(2*x+1,2*y+1));
      }
    for (int y=0; y<CK.ySize; y++)
      for (int x=0; x<CK.xSize; x++){
@@ -696,9 +696,7 @@ int main(int argc, char *argv[]){
   simgUnsignedToFloat(original_image, raw_image);
   add_noise(image, original_image, p.noise_sigma);
   image.normalize(0, 255);
-  SImg<unsigned char> asb(raw_image.xSize, raw_image.ySize, raw_image.zSize, 0);
-  simgFloatToUnsigned(asb, image);
-  writePGM("noisy.pgm", asb);
+
   CImg<float> noisy(image.data.data(), image.xSize, image.ySize, image.zSize, 1,1); noisy.display(disp1);
   cout<<"PSNR Noisy "<<psnr(original_image, image)<<endl;
 
@@ -748,6 +746,7 @@ int main(int argc, char *argv[]){
 
   }
   cout<<"done"<<endl;
+  // Final normalization
   for(int i=0; i<denoised.size; ++i){
     denoised.data[i] /= weights.data[i];
   }
